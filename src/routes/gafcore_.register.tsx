@@ -83,28 +83,48 @@ function GafCoreRegisterPage() {
         return;
       }
 
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: normalizedEmail,
-        password: currentPassword,
-      });
-      if (signInError) {
-        setLoading(false);
-        setError(
-          authError?.message === "User already registered"
-            ? "Esta cuenta ya existe. Si la contraseña no coincide, usa iniciar sesión o recupera tu contraseña."
-            : "Cuenta creada. Revisa tu correo para confirmar el acceso antes de iniciar sesión."
-        );
-        return;
-      }
+      /** Con "confirmar correo" desactivado en Supabase, `signUp` suele traer `session` ya lista. */
+      let user = signUpData.session?.user ?? null;
 
-      const userId = signInData.user?.id ?? signUpData.user?.id;
-      if (userId) {
-        try { await assignRole({ data: { accountType } }); }
-        catch (err) {
+      if (!user) {
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email: normalizedEmail,
+          password: currentPassword,
+        });
+        if (signInError) {
           setLoading(false);
-          setError(err instanceof Error ? err.message : "Error asignando tipo de cuenta");
+          if (authError?.message === "User already registered") {
+            setError(
+              "Esta cuenta ya existe. Si la contraseña no coincide, usa iniciar sesión o recupera tu contraseña.",
+            );
+          } else {
+            const hint = signInError.message ?? "";
+            const needsEmail =
+              /email not confirmed|confirm.*email|not.*verified/i.test(hint) ||
+              hint.toLowerCase().includes("confirm");
+            setError(
+              needsEmail
+                ? "Cuenta creada. Revisa tu correo para confirmar el acceso antes de iniciar sesión."
+                : "Cuenta creada. Pulsa «Inicia sesión» abajo con el mismo correo y contraseña.",
+            );
+          }
           return;
         }
+        user = signInData.user ?? null;
+      }
+
+      const userId = user?.id ?? signUpData.user?.id;
+      if (!userId) {
+        setLoading(false);
+        setError("No se pudo completar el acceso. Prueba «Inicia sesión» abajo.");
+        return;
+      }
+      try {
+        await assignRole({ data: { accountType } });
+      } catch (err) {
+        setLoading(false);
+        setError(err instanceof Error ? err.message : "Error asignando tipo de cuenta");
+        return;
       }
       setLoading(false);
       window.location.replace(redirectTo);

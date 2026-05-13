@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { signInWithOAuth } from "@/lib/supabase-oauth";
 import { useServerFn } from "@tanstack/react-start";
 import { assignGafcoreAccountType } from "@/lib/gafcore-roles.functions";
+import { setPlanChoicePending } from "@/lib/gafcore-plan-choice";
 
 type AccountType = "user" | "demo" | "admin";
 
@@ -37,7 +38,6 @@ function GafCoreRegisterPage() {
     if (redirect?.startsWith("/gafcore") && redirect.includes("plan=") && !redirect.includes("plan=free")) {
       return redirect.startsWith("/") ? redirect : `/${redirect}`;
     }
-    if (plan && plan !== "free") return `/gafcore?plan=${encodeURIComponent(plan)}`;
     if (plan && plan !== "free") return `/gafcore?plan=${encodeURIComponent(plan)}`;
     return "/gafcore#planes";
   })();
@@ -128,6 +128,7 @@ function GafCoreRegisterPage() {
         return;
       }
       setLoading(false);
+      setPlanChoicePending(userId);
       window.location.replace(
         typeof window !== "undefined" ? `${window.location.origin}${postRegisterPath}` : postRegisterPath,
       );

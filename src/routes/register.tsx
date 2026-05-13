@@ -9,6 +9,7 @@ import { signInWithOAuth } from "@/lib/supabase-oauth";
 import { claimMasterAccess } from "@/lib/server-fns/admin.functions";
 import { AuthCard } from "@/components/AuthCard";
 import logo from "@/assets/gafsuite-logo.png";
+import { setPlanChoicePending } from "@/lib/gafcore-plan-choice";
 
 export const Route = createFileRoute("/register")({
   validateSearch: (search: Record<string, unknown>): { plan?: string; redirect?: string } => {
@@ -36,7 +37,7 @@ function RegisterPage() {
   const { plan, redirect } = Route.useSearch();
   const redirectTo =
     redirect ||
-    (plan ? `/gafcore?plan=${encodeURIComponent(plan)}` : "/gafcore/app");
+    (plan ? `/gafcore?plan=${encodeURIComponent(plan)}` : "/gafcore?pick_plan=1");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -84,7 +85,8 @@ function RegisterPage() {
     }
 
     if (user) {
-      window.location.assign(redirectTo);
+      setPlanChoicePending(user.id);
+      window.location.assign(redirectTo.startsWith("/") ? `${window.location.origin}${redirectTo}` : redirectTo);
       return;
     }
 

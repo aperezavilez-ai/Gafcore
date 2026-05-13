@@ -8,6 +8,7 @@ import { GafCoreIDE } from "@/components/gafcore/GafCoreIDE";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useServerFn } from "@tanstack/react-start";
 import { assignGafcoreAccountType } from "@/lib/gafcore-roles.functions";
+import { clearPlanChoicePending, isPlanChoicePending } from "@/lib/gafcore-plan-choice";
 
 export const Route = createFileRoute("/gafcore_/app")({
   component: GafCoreAppPage,
@@ -21,6 +22,8 @@ function GafCoreAppPage() {
   // unos ms en hidratar desde localStorage. Hasta confirmar, mostramos loader.
   const [graceChecking, setGraceChecking] = useState(true);
   const [hasSession, setHasSession] = useState(false);
+  /** Tras auth: comprobar si debe ir a elegir plan antes de montar el IDE. */
+  const [planGateChecked, setPlanGateChecked] = useState(false);
 
   /** Asegura créditos de bienvenida si el backend los dejó en 0 (p. ej. cuenta ya existía). */
   useEffect(() => {
@@ -66,6 +69,36 @@ function GafCoreAppPage() {
     return () => { cancelled = true; };
   }, [authLoading, user]);
 
+  /** Registro nuevo: obligar a pasar por /gafcore#planes antes del IDE (localStorage por usuario). */
+  useEffect(() => {
+    if (authLoading || graceChecking) return;
+    if (!user?.id && !hasSession) {
+      setPlanGateChecked(false);
+      return;
+    }
+    void (async () => {
+      const uid = user?.id ?? (await supabase.auth.getSession()).data.session?.user?.id;
+      if (!uid) {
+        setPlanGateChecked(true);
+        return;
+      }
+      try {
+        const url = typeof window !== "undefined" ? new URL(window.location.href) : null;
+        const checkoutOk =
+          url?.searchParams.get("checkout") === "success" ||
+          url?.searchParams.get("credits") === "success";
+        if (checkoutOk) clearPlanChoicePending(uid);
+        if (!checkoutOk && isPlanChoicePending(uid)) {
+          window.location.replace(`${window.location.origin}/gafcore?pick_plan=1#planes`);
+          return;
+        }
+      } catch {
+        /* ignore */
+      }
+      setPlanGateChecked(true);
+    })();
+  }, [authLoading, graceChecking, user?.id, hasSession]);
+
   if (authLoading || graceChecking) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
@@ -85,6 +118,17 @@ function GafCoreAppPage() {
         primaryLabel="Entrar"
         primaryTo="/gafcore/login"
       />
+    );
+  }
+
+  if (!planGateChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Preparando tu espacio…</p>
+        </div>
+      </div>
     );
   }
 

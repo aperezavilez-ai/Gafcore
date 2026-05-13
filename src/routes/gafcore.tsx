@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { CheckoutExperience } from "@/components/CheckoutExperience";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { useI18n } from "@/i18n/I18nProvider";
+import { clearPlanChoicePending } from "@/lib/gafcore-plan-choice";
 
 type ThemeKey = "black" | "white" | "blue" | "gray";
 const THEME_KEY = "gafcore-theme";
@@ -150,6 +151,10 @@ function GafCoreLanding() {
   }, [user]);
 
   const choosePlan = (planId: string) => {
+    if (user?.id) {
+      navigate({ to: "/gafcore", search: { plan: planId } });
+      return;
+    }
     navigate({ to: "/gafcore/register", search: { plan: planId, redirect: `/gafcore?plan=${planId}` } });
   };
 
@@ -284,6 +289,11 @@ function GafCoreLanding() {
                   <Button
                     onClick={() => {
                       if (plan.id === "free") {
+                        if (user?.id) {
+                          clearPlanChoicePending(user.id);
+                          navigate({ to: "/gafcore/app" });
+                          return;
+                        }
                         navigate({
                           to: "/gafcore/register",
                           search: { plan: "free" },

@@ -14,6 +14,34 @@ export interface Subscription {
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   environment: string;
+  /** Columna en BD (Stripe webhook); sirve si `price_id` es un id técnico de Stripe. */
+  plan_tier?: string | null;
+}
+
+/**
+ * Texto para la barra del IDE: sin suscripción activa → siempre "Plan Gratis" (aunque hayan comprado créditos sueltos).
+ * Con suscripción de pago activa → nombre del plan según `price_id` o `plan_tier`.
+ */
+export function resolveGafcorePlanDisplayLabel(args: {
+  isAdmin: boolean;
+  subActive: boolean;
+  priceId: string | null | undefined;
+  planTierCol: string | null | undefined;
+}): string {
+  const { isAdmin, subActive, priceId, planTierCol } = args;
+  if (isAdmin) return "Administrador";
+  if (!subActive) return "Plan Gratis";
+  const pid = priceId ?? "";
+  if (pid === "plan_basico_monthly") return "Plan Starter";
+  if (pid === "plan_pro_monthly" || pid === "plan_creador_monthly") return "Plan Creador";
+  if (pid === "plan_premium_monthly") return "Plan Pro";
+  const t = (planTierCol ?? "").toLowerCase();
+  if (t === "basico") return "Plan Starter";
+  if (t === "pro") return "Plan Creador";
+  if (t === "premium") return "Plan Pro";
+  if (t === "creador") return "Plan Creador";
+  if (pid.startsWith("price_")) return "Plan de pago";
+  return "Plan de pago";
 }
 
 export function useSubscription(userId: string | undefined) {
@@ -85,10 +113,12 @@ export function useSubscription(userId: string | undefined) {
 
   const isActive = isAdmin || subActive;
 
+  const planTierCol = subscription?.plan_tier ?? null;
+
   const planName = isAdmin ? "Master" :
-                   subscription?.price_id === "plan_creador_monthly" ? "Label" :
+                   subscription?.price_id === "plan_creador_monthly" ? "Creador" :
                    subscription?.price_id === "plan_premium_monthly" ? "Pro" :
-                   subscription?.price_id === "plan_pro_monthly" ? "Creator" :
+                   subscription?.price_id === "plan_pro_monthly" ? "Creador" :
                    subscription?.price_id === "plan_basico_monthly" ? "Starter" : null;
 
   // Tier: "creador" => unlimited (fair-use). All other paid plans grant full access.
@@ -98,7 +128,18 @@ export function useSubscription(userId: string | undefined) {
     subscription?.price_id === "plan_premium_monthly" ? "premium" :
     subscription?.price_id === "plan_pro_monthly" ? "pro" :
     subscription?.price_id === "plan_basico_monthly" ? "basico" :
+    planTierCol === "basico" ? "basico" :
+    planTierCol === "pro" ? "pro" :
+    planTierCol === "premium" ? "premium" :
+    planTierCol === "creador" ? "creador" :
     null;
 
-  return { subscription, isActive, planName, planTier, loading, isAdmin };
+  const planDisplayLabel = resolveGafcorePlanDisplayLabel({
+    isAdmin,
+    subActive,
+    priceId: subscription?.price_id,
+    planTierCol,
+  });
+
+  return { subscription, isActive, planName, planTier, planDisplayLabel, loading, isAdmin };
 }

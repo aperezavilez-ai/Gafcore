@@ -82,7 +82,7 @@ export function GafCoreIDE() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { balance, monthlyAllowance, loading: creditsLoading } = useCredits(user?.id);
-  const { isAdmin } = useSubscription(user?.id);
+  const { isAdmin, planDisplayLabel } = useSubscription(user?.id);
   const [files, setFiles] = useState<FileItem[]>(initialFiles);
   const [activeIndex, setActiveIndex] = useState(0);
   const [openTabs, setOpenTabs] = useState<string[]>([initialFiles[0].name]);
@@ -390,7 +390,9 @@ export function GafCoreIDE() {
                   <span className="flex h-5 w-5 items-center justify-center rounded bg-muted text-[10px] font-bold">G</span>
                   GafCore · {isAdmin ? "Administrador" : "Usuario"}
                 </span>
-                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">{isAdmin ? "ADMIN" : "PLAN"}</span>
+                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary max-w-[120px] truncate">
+                  {isAdmin ? "ADMIN" : planDisplayLabel}
+                </span>
               </DropdownMenuLabel>
               <div className="px-2 py-1.5">
                 <div className="flex items-center justify-between text-[11.5px]">
@@ -538,20 +540,32 @@ export function GafCoreIDE() {
               </DropdownMenuSub>
             </DropdownMenuContent>
           </DropdownMenu>
-          <button
-            onClick={() => setHistoryOpen(true)}
-            className="ml-1 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="Historial de versiones"
-          >
-            <History className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => setSecretsOpen(true)}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="Secretos del proyecto"
-          >
-            <KeyRound className="h-4 w-4" />
-          </button>
+          <div className="ml-1 flex min-w-0 max-w-[200px] items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Historial de versiones"
+            >
+              <History className="h-4 w-4" />
+            </button>
+            <span
+              className="truncate text-[11px] font-semibold leading-tight text-foreground"
+              title={planDisplayLabel}
+            >
+              {planDisplayLabel}
+            </span>
+          </div>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setSecretsOpen(true)}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Secretos del proyecto"
+            >
+              <KeyRound className="h-4 w-4" />
+            </button>
+          )}
           {isAdmin && (
             <button
               onClick={async () => {

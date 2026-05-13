@@ -492,7 +492,8 @@ function PrivacyPanel() {
           <Button variant="outline" onClick={exportData}>Exportar mis datos</Button>
           <Button variant="destructive" onClick={async () => {
             if (!confirm("Cerrar sesión en este dispositivo?")) return;
-            await supabase.auth.signOut(); window.location.href = "/gafcore";
+            await supabase.auth.signOut();
+            window.location.href = "/gafcore/login?redirect=/gafcore/app&signedOut=1";
           }}>Cerrar sesión</Button>
         </div>
       </section>
@@ -518,7 +519,7 @@ function DevicesPanel() {
               <div className="mt-1 text-xs text-muted-foreground break-all">{sessionInfo.ua}</div>
               <div className="mt-1 text-xs text-muted-foreground">Último acceso: {sessionInfo.at}</div>
             </div>
-            <Button variant="outline" size="sm" onClick={async () => { await supabase.auth.signOut(); window.location.href = "/gafcore"; }}>
+            <Button variant="outline" size="sm" onClick={async () => { await supabase.auth.signOut(); window.location.href = "/gafcore/login?redirect=/gafcore/app&signedOut=1"; }}>
               <LogOut className="mr-1.5 h-3.5 w-3.5" /> Cerrar sesión
             </Button>
           </div>

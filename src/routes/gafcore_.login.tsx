@@ -1,15 +1,22 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, Eye, EyeOff, Mail, Lock, KeyRound, Sparkles, Zap, Shield, Code2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { signInWithOAuth } from "@/lib/supabase-oauth";
 
 export const Route = createFileRoute("/gafcore_/login")({
-  validateSearch: (search: Record<string, unknown>): { redirect?: string } => {
-    const redirect = search.redirect;
-    return typeof redirect === "string" && redirect.startsWith("/") && !redirect.startsWith("//")
-      ? { redirect }
-      : {};
+  validateSearch: (search: Record<string, unknown>): { redirect?: string; signedOut?: boolean } => {
+    const redirect =
+      typeof search.redirect === "string" && search.redirect.startsWith("/") && !search.redirect.startsWith("//")
+        ? search.redirect
+        : undefined;
+    const raw = search.signedOut;
+    const signedOut =
+      raw === true || raw === "true" || raw === "1" || raw === 1 || raw === "yes";
+    const out: { redirect?: string; signedOut?: boolean } = {};
+    if (redirect) out.redirect = redirect;
+    if (signedOut) out.signedOut = true;
+    return out;
   },
   component: GafCoreLoginPage,
   head: () => ({ meta: [{ title: "Entrar — GafCore" }] }),
@@ -38,6 +45,8 @@ function formatGafcoreSignInError(raw: string): string {
 }
 
 function GafCoreLoginPage() {
+  const navigate = useNavigate();
+  const search = Route.useSearch();
   const [showPw, setShowPw] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -47,9 +56,25 @@ function GafCoreLoginPage() {
   const [resetLoading, setResetLoading] = useState(false);
   const [activeSessionEmail, setActiveSessionEmail] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
+  /** Tras cerrar sesión: evita que el gestor del navegador rellene al instante; se quita al enfocar un campo. */
+  const [blockAutofillUntilFocus, setBlockAutofillUntilFocus] = useState(() => Boolean(search.signedOut));
   const light = false;
-  const { redirect } = Route.useSearch();
+  const { redirect, signedOut } = search;
   const redirectTo = redirect || "/gafcore/app";
+
+  useEffect(() => {
+    if (!signedOut) return;
+    setEmail("");
+    setPassword("");
+    setError("");
+    setMessage("");
+    setBlockAutofillUntilFocus(true);
+    navigate({
+      to: "/gafcore/login",
+      replace: true,
+      search: redirect ? { redirect } : {},
+    });
+  }, [signedOut, redirect, navigate]);
 
   useEffect(() => {
     let active = true;
@@ -59,10 +84,17 @@ function GafCoreLoginPage() {
     return () => { active = false; };
   }, []);
 
+  const openCredentialFields = () => {
+    setBlockAutofillUntilFocus(false);
+  };
+
   const switchAccount = async () => {
     setSwitching(true);
     await supabase.auth.signOut();
     setActiveSessionEmail(null);
+    setEmail("");
+    setPassword("");
+    setBlockAutofillUntilFocus(true);
     setSwitching(false);
   };
 
@@ -297,6 +329,12 @@ function GafCoreLoginPage() {
             </div>
 
             <form className="space-y-4" onSubmit={handleSubmit} autoComplete="on">
+              {blockAutofillUntilFocus && (
+                <p className={`text-xs ${subtleText}`}>
+                  Tras cerrar sesión, vuelve a escribir tu correo y contraseña (o usa Google/Apple). Si el navegador las
+                  guardó, puede seguir sugeriéndolas al pulsar en el campo: eso lo controla tu navegador, no GafCore.
+                </p>
+              )}
               <div>
                 <label className={`mb-1.5 block text-sm font-medium ${light ? "text-slate-700" : "text-slate-200"}`} htmlFor="gc-email">
                   Correo electrónico
@@ -309,6 +347,8 @@ function GafCoreLoginPage() {
                     type="email"
                     autoComplete="username"
                     value={email}
+                    readOnly={blockAutofillUntilFocus}
+                    onFocus={openCredentialFields}
                     onChange={(e) => setEmail(e.target.value)}
                     required
                     placeholder="tu@correo.com"
@@ -328,6 +368,8 @@ function GafCoreLoginPage() {
                     type={showPw ? "text" : "password"}
                     autoComplete="current-password"
                     value={password}
+                    readOnly={blockAutofillUntilFocus}
+                    onFocus={openCredentialFields}
                     onChange={(e) => setPassword(e.target.value)}
                     required
                     placeholder="••••••••"

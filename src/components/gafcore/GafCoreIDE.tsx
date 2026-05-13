@@ -672,7 +672,10 @@ export function GafCoreIDE() {
               const { supabase } = await import("@/integrations/supabase/client");
               await supabase.auth.signOut();
               toast.success("Sesión cerrada");
-              navigate({ to: "/gafcore" });
+              navigate({
+                to: "/gafcore/login",
+                search: { redirect: "/gafcore/app", signedOut: true },
+              });
             }}
             className="h-8 gap-1.5 px-2.5 text-[13px] text-foreground hover:bg-muted"
             title="Cerrar sesión"

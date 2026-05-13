@@ -17,6 +17,15 @@ let cached: { url: string; key: string; client: SupabaseClient } | null = null;
 
 export function getUserSupabase(): SupabaseClient | null {
   try {
+    if (typeof window !== "undefined") {
+      const host = window.location.hostname.toLowerCase();
+      // En producción de GafCore no se debe usar config local legacy,
+      // porque puede apuntar a otro proyecto y romper guardado por RLS.
+      if (host === "gafcore.com" || host.endsWith(".gafcore.com")) {
+        localStorage.removeItem(CFG_KEY);
+        return defaultSupabase as unknown as SupabaseClient;
+      }
+    }
     const cfg = JSON.parse(localStorage.getItem(CFG_KEY) ?? "{}");
     if (!cfg.url || !cfg.apiKey) {
       // Fallback al proyecto Supabase configurado en variables de entorno

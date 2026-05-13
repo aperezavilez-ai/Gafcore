@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { GafCoreAuthDialog } from "@/components/ide/GafCoreAuthDialog";
 import { toast } from "sonner";
 import { loadProjectFiles, saveProjectFiles, getUserSupabase, listProjects, createProject, renameProject, getCurrentProjectId, setCurrentProjectId, listSecrets, type ProjectRow } from "@/lib/userSupabase";
+import { fileItemsFromBrowserFileList } from "@/lib/gafcore-import-files";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -38,6 +39,7 @@ import {
   Check,
   Plus,
   FolderOpen,
+  Upload,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -117,6 +119,8 @@ export function GafCoreIDE() {
     return localStorage.getItem("gafcore_project_folder") ?? "src";
   });
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const importFolderInputRef = useRef<HTMLInputElement>(null);
+  const importFilesInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -134,10 +138,7 @@ export function GafCoreIDE() {
     toast.success("Pago confirmado. Créditos actualizados.");
   }, [refreshCredits]);
 
-  const visibleProjects = projects.filter((project, index, all) => {
-    const name = (project.name ?? "").trim().toLowerCase();
-    return all.findIndex((p) => (p.name ?? "").trim().toLowerCase() === name) === index;
-  });
+  const visibleProjects = projects;
   const creditsLabel = isAdmin
     ? "Ilimitados ∞"
     : isFairUseCreadorPlan || isUnlimitedDaily
@@ -194,14 +195,87 @@ export function GafCoreIDE() {
 
   const newProject = async () => {
     const name = window.prompt("Nombre del nuevo proyecto", "Nuevo proyecto");
-    if (!name) return;
-    const created = await createProject(name);
+    if (!name?.trim()) return;
+    const created = await createProject(name.trim());
     if (!created) {
-      toast.error("No se pudo crear");
+      toast.error("No se pudo crear el proyecto");
       return;
     }
+    setCurrentProjectId(created.id);
+    setCurrentProjectIdState(created.id);
+    setProjectName(created.name);
+    setFiles(initialFiles);
+    setOpenTabs([initialFiles[0].name]);
+    setActiveIndex(0);
+    setPreviewKey((k) => k + 1);
+    const saved = await saveProjectFiles(initialFiles);
+    if (!saved) toast.error("Proyecto creado pero no se pudieron guardar los archivos iniciales");
     await refreshProjects();
-    await switchProject(created.id, created.name);
+    toast.success(`Proyecto «${created.name}» creado. Elige otro en la lista cuando quieras.`);
+  };
+
+  const applyImportedFiles = async (items: FileItem[], suggestedName: string) => {
+    if (!items.length) {
+      toast.error("No hay archivos importables.");
+      return;
+    }
+    const name = window.prompt("Nombre del proyecto en GafCore", suggestedName) ?? "";
+    if (!name.trim()) {
+      toast.message("Importación cancelada.");
+      return;
+    }
+    const created = await createProject(name.trim());
+    if (!created) {
+      toast.error("No se pudo crear el proyecto");
+      return;
+    }
+    setCurrentProjectId(created.id);
+    setCurrentProjectIdState(created.id);
+    setProjectName(created.name);
+    setFiles(items);
+    setOpenTabs([items[0]?.name].filter(Boolean) as string[]);
+    setActiveIndex(0);
+    setPreviewKey((k) => k + 1);
+    const saved = await saveProjectFiles(items);
+    if (!saved) toast.error("No se pudieron guardar los archivos importados");
+    await refreshProjects();
+    toast.success(`Importados ${items.length} archivos en «${created.name}».`);
+  };
+
+  const onImportFolderChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files;
+    e.target.value = "";
+    if (!list?.length) return;
+    try {
+      const items = await fileItemsFromBrowserFileList(list);
+      if (!items.length) {
+        toast.error(
+          "No se encontraron archivos de texto o código (omitimos node_modules, dist, binarios, etc.). Prueba con la carpeta que contiene tu src.",
+        );
+        return;
+      }
+      await applyImportedFiles(items, "Proyecto importado");
+    } catch (err) {
+      console.error(err);
+      toast.error("Error al leer la carpeta.");
+    }
+  };
+
+  const onImportFilesChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const list = e.target.files;
+    e.target.value = "";
+    if (!list?.length) return;
+    try {
+      const items = await fileItemsFromBrowserFileList(list);
+      if (!items.length) {
+        toast.error("No se pudieron importar esos archivos. Usa extensiones de código (.ts, .tsx, .html, .css, etc.).");
+        return;
+      }
+      await applyImportedFiles(items, "Archivos importados");
+    } catch (err) {
+      console.error(err);
+      toast.error("Error al importar archivos.");
+    }
   };
 
   const renameCurrent = async () => {
@@ -398,6 +472,21 @@ export function GafCoreIDE() {
       className="gafcore-light flex h-screen flex-col overflow-hidden"
       style={{ fontFamily: "'Inter', system-ui, sans-serif", background: "#ffffff", color: "#0f172a" }}
     >
+      <input
+        ref={importFolderInputRef}
+        type="file"
+        className="hidden"
+        multiple
+        {...({ webkitdirectory: "" } as Record<string, string>)}
+        onChange={onImportFolderChange}
+      />
+      <input
+        ref={importFilesInputRef}
+        type="file"
+        className="hidden"
+        multiple
+        onChange={onImportFilesChange}
+      />
       {/* Top bar */}
       <header className="flex h-12 shrink-0 items-center justify-between border-b px-3" style={{ background: "#ffffff", borderColor: "#e5e7eb" }}>
         {/* Left: logo + project */}
@@ -469,6 +558,24 @@ export function GafCoreIDE() {
                   <Plus className="h-3 w-3" /> Nuevo
                 </button>
               </DropdownMenuLabel>
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.preventDefault();
+                  importFolderInputRef.current?.click();
+                }}
+              >
+                <FolderOpen className="mr-2 h-4 w-4" />
+                Importar carpeta
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.preventDefault();
+                  importFilesInputRef.current?.click();
+                }}
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Importar archivos…
+              </DropdownMenuItem>
               <div className="max-h-48 overflow-y-auto">
                 {visibleProjects.map((p) => (
                   <DropdownMenuItem
@@ -601,12 +708,24 @@ export function GafCoreIDE() {
             </button>
             <div
               className="min-w-0 leading-tight"
-              title={`${planDisplayLabel} — ${creditsLabel}`}
+              title={isAdmin ? "Administrador — créditos ilimitados" : `${planDisplayLabel} — ${creditsLabel}`}
             >
-              <div className="truncate text-[11px] font-semibold text-foreground">{planDisplayLabel}</div>
-              <div className="truncate text-[10px] font-medium tabular-nums text-muted-foreground">
-                {isAdmin ? "Créditos: ilimitados" : `Créditos: ${toolbarCreditsLine}`}
-              </div>
+              {!isAdmin ? (
+                <>
+                  <div className="truncate text-[11px] font-semibold text-foreground">{planDisplayLabel}</div>
+                  <div className="truncate text-[10px] font-medium tabular-nums text-muted-foreground">
+                    Créditos: {toolbarCreditsLine}
+                  </div>
+                </>
+              ) : (
+                <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] font-medium text-muted-foreground">
+                  <span className="shrink-0 font-semibold text-foreground">Administrador</span>
+                  <span className="text-muted-foreground/70" aria-hidden>
+                    ·
+                  </span>
+                  <span className="tabular-nums">Créditos ilimitados</span>
+                </div>
+              )}
             </div>
           </div>
           {isAdmin ? (
@@ -893,7 +1012,7 @@ export function GafCoreIDE() {
           ) : usersError ? (
             <p className="py-2 text-sm text-muted-foreground">{usersError}</p>
           ) : !userStats ? (
-            <p className="py-2 text-sm text-muted-foreground">Aun no hay datos disponibles.</p>
+            <p className="py-2 text-sm text-muted-foreground">Aún no hay datos disponibles.</p>
           ) : (
             <div className="grid grid-cols-3 gap-3 py-2">
               <div className="rounded-lg border p-3 text-center">

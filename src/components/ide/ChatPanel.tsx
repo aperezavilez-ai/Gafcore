@@ -581,7 +581,13 @@ export function ChatPanel({
           <Coins className="h-3 w-3 text-amber-400" />
           {creditsLoading ? (
             <span className="text-muted-foreground">…</span>
-          ) : isAdmin || isUnlimitedDaily ? (
+          ) : isAdmin ? (
+            <span className="inline-flex items-center gap-1">
+              <span className="font-semibold text-foreground">Administrador</span>
+              <span className="text-muted-foreground">·</span>
+              <span>Ilimitado</span>
+            </span>
+          ) : isUnlimitedDaily ? (
             <span>Ilimitado</span>
           ) : (
             <>

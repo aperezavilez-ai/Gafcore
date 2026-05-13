@@ -44,6 +44,7 @@ Reglas de **archivos (eficiencia)**:
 - Si no hay cambios de código, devuelve "files": [].
 - No incluyas markdown ni triple backtick. Solo JSON válido.`;
 
+/** Créditos que consume cada ejecución de IA vía `consume_credits` (1 solicitud = 1 unidad salvo planes ilimitados). */
 export const COST_PER_REQUEST = 1;
 
 /** Slugs compatibles con OpenRouter (o otro gateway OpenAI-compatible). */

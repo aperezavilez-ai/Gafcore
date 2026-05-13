@@ -227,6 +227,14 @@ export function ChatPanel({
   const { balance, isUnlimitedDaily, loading: creditsLoading, refresh: refreshCredits } = useCredits(user?.id);
   const { isAdmin } = useSubscription(user?.id);
 
+  useEffect(() => {
+    const onCreditsApplied = () => {
+      void refreshCredits();
+    };
+    window.addEventListener("gafcore:credits-applied", onCreditsApplied);
+    return () => window.removeEventListener("gafcore:credits-applied", onCreditsApplied);
+  }, [refreshCredits]);
+
   const toggleMic = () => {
     const SR: any = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {

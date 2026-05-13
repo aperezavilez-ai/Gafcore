@@ -81,7 +81,7 @@ type View = "preview" | "code";
 export function GafCoreIDE() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { balance, monthlyAllowance, loading: creditsLoading, isUnlimitedDaily } = useCredits(user?.id);
+  const { balance, monthlyAllowance, loading: creditsLoading, isUnlimitedDaily, refresh: refreshCredits } = useCredits(user?.id);
   const { isAdmin, planDisplayLabel, subscription, subActive } = useSubscription(user?.id);
 
   const isFairUseCreadorPlan =
@@ -117,6 +117,23 @@ export function GafCoreIDE() {
     return localStorage.getItem("gafcore_project_folder") ?? "src";
   });
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const ok =
+      url.searchParams.get("checkout") === "success" ||
+      url.searchParams.get("credits") === "success";
+    if (!ok) return;
+    url.searchParams.delete("checkout");
+    url.searchParams.delete("credits");
+    url.searchParams.delete("session_id");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    void refreshCredits();
+    window.dispatchEvent(new Event("gafcore:credits-applied"));
+    toast.success("Pago confirmado. Créditos actualizados.");
+  }, [refreshCredits]);
+
   const visibleProjects = projects.filter((project, index, all) => {
     const name = (project.name ?? "").trim().toLowerCase();
     return all.findIndex((p) => (p.name ?? "").trim().toLowerCase() === name) === index;
@@ -401,9 +418,15 @@ export function GafCoreIDE() {
           </div>
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
-              <button type="button" className="flex items-center gap-1 rounded-md px-2 py-1 text-[13px] font-medium hover:bg-muted">
-                <span className="truncate max-w-[180px]">{projectName}</span>
-                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              <button type="button" className="flex min-w-0 max-w-[min(100vw-200px,420px)] items-center gap-1.5 rounded-md px-2 py-1 text-[13px] font-medium hover:bg-muted">
+                <span className="truncate">{projectName}</span>
+                <span
+                  className="shrink-0 truncate rounded-md border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground max-w-[140px]"
+                  title={isAdmin ? "Administrador" : planDisplayLabel}
+                >
+                  {isAdmin ? "Admin" : planDisplayLabel}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-64" onCloseAutoFocus={(e) => e.preventDefault()}>

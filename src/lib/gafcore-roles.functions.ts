@@ -71,8 +71,43 @@ export const assignGafcoreAccountType = createServerFn({ method: "POST" })
       return { ok: true, role: "demo" as const };
     }
 
-    /** Usuario normal: reparar monthly_allowance en 0 (p. ej. plan Creador vía Stripe); bienvenida si saldo 0 sin movimientos. */
+    /** Usuario normal: plan gratis = 10 créditos alineados; reparar monthly_allowance en 0; bienvenida si saldo 0 sin movimientos. */
     if (accountType === "user") {
+      const env = getStripeEnvironment();
+      const { data: sub, error: subErr } = await supabaseAdmin
+        .from("subscriptions")
+        .select("status, current_period_end, price_id, plan_tier")
+        .eq("user_id", userId)
+        .eq("environment", env)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (subErr) throw new Error(subErr.message);
+      const subOk = isGafcoreSubscriptionPeriodActive(sub);
+
+      const { count: txCount, error: txCountErr } = await supabaseAdmin
+        .from("credit_transactions")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId);
+      if (txCountErr) throw new Error(txCountErr.message);
+
+      const { data: ucBal } = await supabaseAdmin.from("user_credits").select("balance").eq("user_id", userId).maybeSingle();
+      const initialBal = ucBal?.balance ?? 0;
+
+      /** Sin suscripción activa y sin movimientos: el trigger de signup suele dejar 25; producto = 10 créditos gratis. */
+      if (!subOk && (txCount ?? 0) === 0 && initialBal === 25) {
+        const { error: normErr } = await supabaseAdmin
+          .from("user_credits")
+          .update({
+            balance: 10,
+            monthly_allowance: 10,
+            daily_limit: 10,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", userId);
+        if (normErr) throw new Error(normErr.message);
+      }
+
       const { data: creditRow, error: creditErr } = await supabaseAdmin
         .from("user_credits")
         .select("balance, monthly_allowance, daily_limit")
@@ -82,18 +117,6 @@ export const assignGafcoreAccountType = createServerFn({ method: "POST" })
 
       const monthly = creditRow?.monthly_allowance ?? 0;
       if (creditRow && monthly === 0) {
-        const env = getStripeEnvironment();
-        const { data: sub, error: subErr } = await supabaseAdmin
-          .from("subscriptions")
-          .select("status, current_period_end, price_id, plan_tier")
-          .eq("user_id", userId)
-          .eq("environment", env)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (subErr) throw new Error(subErr.message);
-
-        const subOk = isGafcoreSubscriptionPeriodActive(sub);
         const isCreadorFairUse =
           subOk &&
           (sub?.price_id === "plan_creador_monthly" ||

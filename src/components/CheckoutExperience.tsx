@@ -183,19 +183,25 @@ function OrderSummary({
               </div>
               <div>
                 <div className="font-semibold text-foreground">{brandLabel} · Plan {plan.name}</div>
-                <div className="text-xs text-muted-foreground">{plan.credits} créditos / mes</div>
+                <div className="text-xs text-muted-foreground">
+                  {plan.price === 0 ? `${plan.credits} créditos de bienvenida` : `${plan.credits} créditos / mes`}
+                </div>
               </div>
             </div>
             <div className="text-right">
-              <div className="text-2xl font-black text-foreground">${plan.price}</div>
-              <div className="text-[11px] text-muted-foreground -mt-0.5">/mes</div>
+              <div className="text-2xl font-black text-foreground">
+                {plan.price === 0 ? "Gratis" : `$${plan.price}`}
+              </div>
+              <div className="text-[11px] text-muted-foreground -mt-0.5">
+                {plan.price === 0 ? "sin cargo" : "/mes"}
+              </div>
             </div>
           </div>
 
           <div className="my-4 h-px bg-border/60" />
 
           <div className="space-y-1.5 text-sm">
-            <Row label="Subtotal" value={`$${totals.subtotal.toFixed(2)}`} />
+            <Row label="Subtotal" value={plan.price === 0 ? "Gratis" : `$${totals.subtotal.toFixed(2)}`} />
             <Row label="Impuestos" value={`$${totals.taxes.toFixed(2)}`} />
           </div>
 
@@ -205,9 +211,9 @@ function OrderSummary({
             <span className="font-semibold text-foreground">Total</span>
             <div className="flex items-baseline gap-1.5">
               <span className="text-2xl font-black bg-gradient-to-r from-fuchsia-400 to-violet-400 bg-clip-text text-transparent">
-                ${totals.total.toFixed(2)}
+                {plan.price === 0 ? "Gratis" : `$${totals.total.toFixed(2)}`}
               </span>
-              <span className="text-xs text-muted-foreground">USD</span>
+              {plan.price > 0 && <span className="text-xs text-muted-foreground">USD</span>}
             </div>
           </div>
         </div>
@@ -250,13 +256,17 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function FreePlanConfirm({ returnUrl }: { returnUrl: string }) {
   return (
-    <div className="rounded-xl border border-border/60 bg-background/40 p-5 text-center">
-      <p className="text-sm text-muted-foreground mb-4">
-        Tu plan Free no requiere pago. Continúa para activarlo.
+    <div className="rounded-xl border border-border/60 bg-background/40 p-5 text-center space-y-3">
+      <p className="text-sm font-medium text-foreground">Plan gratis — sin pago</p>
+      <p className="text-sm text-muted-foreground">
+        Entra directo al editor. Tendrás <strong className="text-foreground">10 créditos</strong> de bienvenida; cada uso de la IA consume créditos según la operación.
       </p>
       <Button asChild size="lg" className="w-full">
-        <a href={returnUrl}>Activar plan Free <ArrowRight size={16} /></a>
+        <a href={returnUrl}>Entrar a GafCore <ArrowRight size={16} /></a>
       </Button>
+      <p className="text-[11px] text-muted-foreground">
+        Si preferías revisar otros planes, cierra este panel y vuelve a la sección de precios.
+      </p>
     </div>
   );
 }

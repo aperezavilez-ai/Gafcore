@@ -14,6 +14,7 @@ import { CheckoutExperience } from "@/components/CheckoutExperience";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { useI18n } from "@/i18n/I18nProvider";
 import { clearPlanChoicePending } from "@/lib/gafcore-plan-choice";
+import { toast } from "sonner";
 
 type ThemeKey = "black" | "white" | "blue" | "gray";
 const THEME_KEY = "gafcore-theme";
@@ -140,15 +141,21 @@ function GafCoreLanding() {
   }, [authLoading, user?.id, assignUserWelcome]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
     const url = new URL(window.location.href);
     const planParam = url.searchParams.get("plan");
-    if (planParam) {
-      setCheckoutPriceId(planParam);
-      url.searchParams.delete("plan");
-      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    if (!planParam) return;
+    url.searchParams.delete("plan");
+    const qs = url.searchParams.toString();
+    window.history.replaceState({}, "", `${url.pathname}${qs ? `?${qs}` : ""}${url.hash}`);
+    if (planParam === "free") {
+      clearPlanChoicePending(user.id);
+      toast.success("Plan gratis: entra al editor con 10 créditos de bienvenida.");
+      navigate({ to: "/gafcore/app" });
+      return;
     }
-  }, [user]);
+    setCheckoutPriceId(planParam);
+  }, [user?.id, navigate]);
 
   const choosePlan = (planId: string) => {
     if (user?.id) {

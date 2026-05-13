@@ -1,6 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { useServerFn } from "@tanstack/react-start";
+import { assignGafcoreAccountType } from "@/lib/gafcore-roles.functions";
 import { Button } from "@/components/ui/button";
 import {
   Check, ArrowRight, Rocket, Zap, Crown, Gift,
@@ -102,9 +104,39 @@ const BOTTOM_ROWS = [
 function GafCoreLanding() {
   const navigate = useNavigate();
   const { t } = useI18n();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
+  const assignUserWelcome = useServerFn(assignGafcoreAccountType);
   const { theme, setTheme } = useGafcoreTheme();
   const [checkoutPriceId, setCheckoutPriceId] = useState<string | null>(null);
+
+  /** Tras verificar correo: URL con ?pick_plan=1 → tabla de planes (añadir en Supabase Auth URL redirects). */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("pick_plan") !== "1") return;
+    url.searchParams.delete("pick_plan");
+    const qs = url.searchParams.toString();
+    window.history.replaceState({}, "", `${url.pathname}${qs ? `?${qs}` : ""}${url.hash}`);
+    queueMicrotask(() => {
+      document.getElementById("planes")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, []);
+
+  /** Créditos bienvenida / reparación al entrar con sesión (misma lógica que /gafcore/app). */
+  useEffect(() => {
+    if (authLoading || !user?.id) return;
+    void (async () => {
+      const id = user.id;
+      const k = `gafcore_welcome_sync_v2_${id}`;
+      if (typeof window !== "undefined" && sessionStorage.getItem(k)) return;
+      if (typeof window !== "undefined") sessionStorage.setItem(k, "1");
+      try {
+        await assignUserWelcome({ data: { accountType: "user" } });
+      } catch {
+        if (typeof window !== "undefined") sessionStorage.removeItem(k);
+      }
+    })();
+  }, [authLoading, user?.id, assignUserWelcome]);
 
   useEffect(() => {
     if (!user) return;
@@ -113,7 +145,7 @@ function GafCoreLanding() {
     if (planParam) {
       setCheckoutPriceId(planParam);
       url.searchParams.delete("plan");
-      window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     }
   }, [user]);
 
@@ -254,7 +286,7 @@ function GafCoreLanding() {
                       if (plan.id === "free") {
                         navigate({
                           to: "/gafcore/register",
-                          search: { plan: "free", redirect: "/gafcore/app" },
+                          search: { plan: "free" },
                         });
                         return;
                       }

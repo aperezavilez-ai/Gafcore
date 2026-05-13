@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { ArrowLeft, ArrowRight, Eye, EyeOff, Mail, Lock, Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -30,16 +30,16 @@ function GafCoreRegisterPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const light = false;
-  const navigate = useNavigate();
   const { plan, redirect } = Route.useSearch();
-  /** Tras verificar correo: pago → checkout en inicio; gratis → app; sin elección → tabla de planes. */
-  const redirectTo =
-    redirect ??
-    (plan === "free"
-      ? "/gafcore/app"
-      : plan
-        ? `/gafcore?plan=${encodeURIComponent(plan)}`
-        : "/gafcore#planes");
+  /** Tras crear cuenta o verificar correo: siempre a planes primero; solo si eligieron plan de pago → URL con ?plan= para abrir checkout. */
+  const postRegisterPath = (() => {
+    if (redirect?.startsWith("/gafcore") && redirect.includes("plan=") && !redirect.includes("plan=free")) {
+      return redirect.startsWith("/") ? redirect : `/${redirect}`;
+    }
+    if (plan && plan !== "free") return `/gafcore?plan=${encodeURIComponent(plan)}`;
+    if (plan && plan !== "free") return `/gafcore?plan=${encodeURIComponent(plan)}`;
+    return "/gafcore#planes";
+  })();
   const assignRole = useServerFn(assignGafcoreAccountType);
 
   const accountType: AccountType = "user";
@@ -71,7 +71,7 @@ function GafCoreRegisterPage() {
       const signUpPromise = supabase.auth.signUp({
         email: normalizedEmail,
         password: currentPassword,
-        options: { emailRedirectTo: window.location.origin + redirectTo },
+        options: { emailRedirectTo: `${window.location.origin}/gafcore?pick_plan=1` },
       });
       const timeoutPromise = new Promise<never>((_, reject) => {
         window.setTimeout(() => reject(new Error("La conexión tardó demasiado. Revisa tu internet e intenta de nuevo.")), 18000);
@@ -104,7 +104,7 @@ function GafCoreRegisterPage() {
               hint.toLowerCase().includes("confirm");
             setError(
               needsEmail
-                ? "Cuenta creada. Revisa tu correo para confirmar el acceso antes de iniciar sesión."
+                ? "Cuenta creada. Revisa tu correo y confirma el enlace; después te llevaremos a elegir tu plan (puedes empezar gratis con 10 créditos)."
                 : "Cuenta creada. Pulsa «Inicia sesión» abajo con el mismo correo y contraseña.",
             );
           }
@@ -127,7 +127,9 @@ function GafCoreRegisterPage() {
         return;
       }
       setLoading(false);
-      window.location.replace(redirectTo);
+      window.location.replace(
+        typeof window !== "undefined" ? `${window.location.origin}${postRegisterPath}` : postRegisterPath,
+      );
     } catch (err) {
       setLoading(false);
       setError(err instanceof Error ? err.message : "No se pudo crear la cuenta. Intenta de nuevo.");
@@ -135,12 +137,12 @@ function GafCoreRegisterPage() {
   };
 
   const handleGoogleSignIn = async () => {
-    const r = await signInWithOAuth("google", redirectTo);
+    const r = await signInWithOAuth("google", "/gafcore?pick_plan=1");
     if (r.error) setError(r.error);
   };
 
   const handleAppleSignIn = async () => {
-    const r = await signInWithOAuth("apple", redirectTo);
+    const r = await signInWithOAuth("apple", "/gafcore?pick_plan=1");
     if (r.error) setError(r.error);
   };
 
@@ -293,7 +295,7 @@ function GafCoreRegisterPage() {
               ¿Ya tienes cuenta?{" "}
               <Link
                 to="/gafcore/login"
-                search={{ redirect: redirectTo }}
+                search={{ redirect: "/gafcore/app" }}
                 className="font-semibold text-violet-400 hover:underline"
               >
                 Inicia sesión

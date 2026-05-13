@@ -15,6 +15,28 @@ export const Route = createFileRoute("/gafcore_/login")({
   head: () => ({ meta: [{ title: "Entrar — GafCore" }] }),
 });
 
+/** Mensajes de GoTrue/Supabase Auth en español + pistas útiles (OAuth-only, etc.). */
+function formatGafcoreSignInError(raw: string): string {
+  const m = raw.trim();
+  if (m === "Invalid login credentials") {
+    return (
+      "El correo o la contraseña no coinciden con una cuenta con contraseña en este proyecto. " +
+      "Si te registraste solo con Google o Apple, entra con ese mismo botón. " +
+      "Si no recuerdas la contraseña, usa «¿Olvidaste tu contraseña?»."
+    );
+  }
+  if (/email not confirmed|confirm.*email|not.*verified|email.*confirm/i.test(m)) {
+    return (
+      "Aún debes confirmar tu correo. Revisa la bandeja de entrada y spam, o crea de nuevo la contraseña con «¿Olvidaste tu contraseña?» " +
+      "si el proyecto tiene confirmación activada."
+    );
+  }
+  if (/rate limit|too many requests|over_request_rate_limit|429/i.test(m)) {
+    return "Demasiados intentos seguidos. Espera un minuto e inténtalo de nuevo.";
+  }
+  return m;
+}
+
 function GafCoreLoginPage() {
   const [showPw, setShowPw] = useState(false);
   const [email, setEmail] = useState("");
@@ -68,19 +90,29 @@ function GafCoreLoginPage() {
       const { data: signInData, error: authError } = await Promise.race([signInPromise, timeoutPromise]);
       if (authError) {
         setLoading(false);
-        setError(authError.message === "Invalid login credentials"
-          ? "El correo o la contraseña no coinciden. Si no recuerdas la contraseña, usa “¿Olvidaste tu contraseña?” para crear una nueva."
-          : authError.message);
+        setError(formatGafcoreSignInError(authError.message));
         return;
       }
       // Confirmar que la sesión está realmente persistida antes de redirigir,
       // así /gafcore/app no aparece como "no autenticado" tras la recarga.
+      let sessionOk = false;
       for (let i = 0; i < 25; i++) {
         const { data } = await supabase.auth.getSession();
-        if (data.session?.user) break;
+        if (data.session?.user) {
+          sessionOk = true;
+          break;
+        }
         await new Promise((r) => setTimeout(r, 80));
       }
       void signInData;
+      if (!sessionOk) {
+        setLoading(false);
+        setError(
+          "El inicio de sesión respondió bien pero no se guardó la sesión en este navegador. " +
+            "Revisa que las cookies y el almacenamiento no estén bloqueados para este sitio, o prueba en ventana privada.",
+        );
+        return;
+      }
       window.location.replace(redirectTo);
     } catch (err) {
       setLoading(false);
@@ -200,7 +232,7 @@ function GafCoreLoginPage() {
               </h1>
               <p className={`mt-2 text-sm ${subtleText}`}>
                 Entra a tu panel<br />
-                y seguir construyendo con IA ✨
+                y sigue construyendo con IA ✨
               </p>
             </div>
 

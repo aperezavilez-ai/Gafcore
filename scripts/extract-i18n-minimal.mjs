@@ -1,0 +1,189 @@
+/**
+ * One-off: lee translations.ts monolítico y escribe cuerpo mínimo (solo KEYS).
+ * Ejecutar: node scripts/extract-i18n-minimal.mjs
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** Copia opcional del monolito histórico (no versionar si es enorme). */
+const SRC =
+  process.env.I18N_MONOLITH_SRC?.trim() ||
+  path.join(ROOT, "src", "i18n", "translations.monolith.backup.ts");
+const OUT = path.join(ROOT, "src", "i18n", "translations.min.generated.ts");
+
+if (!fs.existsSync(SRC)) {
+  console.error(
+    "Falta el monolito fuente. Copia el archivo antiguo a:\n  " +
+      SRC +
+      "\nO define I18N_MONOLITH_SRC con la ruta al .ts monolítico.",
+  );
+  process.exit(1);
+}
+
+const KEYS = new Set([
+  "nav.home",
+  "nav.pricing",
+  "nav.features",
+  "nav.howItWorks",
+  "nav.login",
+  "nav.signOut",
+  "footer.tagline",
+  "footer.product",
+  "footer.stores",
+  "footer.support",
+  "footer.helpCenter",
+  "footer.contact",
+  "footer.legal",
+  "footer.privacy",
+  "footer.terms",
+  "footer.rights",
+  "auth.backToHome",
+  "auth.welcomeBack",
+  "auth.signInDesc",
+  "auth.email",
+  "auth.password",
+  "auth.signIn",
+  "auth.noAccount",
+  "auth.signUp",
+  "auth.createAccount",
+  "auth.createAccountDesc",
+  "auth.firstName",
+  "auth.lastName",
+  "auth.artistName",
+  "auth.minChars",
+  "auth.createBtn",
+  "auth.hasAccount",
+  "auth.signInLink",
+  "chat.title",
+  "chat.subtitle",
+  "chat.placeholder",
+  "dash.dashboard",
+]);
+
+const GC_PREFIX = "gc.";
+
+function extractLangBlock(text, lang) {
+  const re = new RegExp(`\\n\\s*${lang}:\\s*\\{`, "m");
+  const m = text.match(re);
+  if (!m || m.index === undefined) throw new Error(`No block ${lang}`);
+  const start = m.index + m[0].length;
+  let depth = 1;
+  let i = start;
+  for (; i < text.length && depth > 0; i++) {
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}") depth--;
+  }
+  return text.slice(start, i - 1);
+}
+
+function parseEntries(block) {
+  const out = {};
+  const lineRe = /^\s*"([^"]+)":\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$/gm;
+  let m;
+  while ((m = lineRe.exec(block))) {
+    const key = m[1];
+    const raw = m[2];
+    const val = raw.replace(/\\'/g, "'").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    out[key] = val;
+  }
+  return out;
+}
+
+function escStr(s) {
+  return JSON.stringify(s);
+}
+
+const text = fs.readFileSync(SRC, "utf8");
+const langs = ["en", "es", "fr", "pt", "de", "ja", "zh", "ko", "ar"];
+const byLang = {};
+
+for (const lang of langs) {
+  const block = extractLangBlock(text, lang);
+  const entries = parseEntries(block);
+  const pick = {};
+  for (const k of KEYS) {
+    if (entries[k] !== undefined) pick[k] = entries[k];
+    else if (lang !== "en") console.warn(`missing ${lang} ${k}`);
+  }
+  for (const k of Object.keys(entries)) {
+    if (k.startsWith(GC_PREFIX)) pick[k] = entries[k];
+  }
+  byLang[lang] = pick;
+}
+
+// Ajustes producto GafCore (IDE / creación), no música
+const patches = {
+  fr: {
+    "footer.tagline":
+      "Créez des apps et des sites avec l'IA — chat, aperçu en direct et éditeur.",
+    "auth.createAccountDesc":
+      "Créez votre compte et commencez à construire avec GafCore.",
+    "auth.artistName": "Nom d'affichage (optionnel)",
+    "dash.dashboard": "Ouvrir l'IDE",
+  },
+  pt: {
+    "footer.tagline":
+      "Crie apps e sites com IA — chat, pré-visualização ao vivo e editor.",
+    "auth.createAccountDesc":
+      "Crie sua conta e comece a construir com o GafCore.",
+    "auth.artistName": "Nome público (opcional)",
+    "dash.dashboard": "Abrir IDE",
+  },
+  de: {
+    "footer.tagline":
+      "Erstellen Sie Apps und Websites mit KI — Chat, Live-Vorschau und Editor.",
+    "auth.createAccountDesc":
+      "Erstelle dein Konto und beginne mit GafCore zu bauen.",
+    "auth.artistName": "Anzeigename (optional)",
+    "dash.dashboard": "IDE öffnen",
+  },
+  ja: {
+    "footer.tagline":
+      "AIでアプリやサイトを構築 — チャット、ライブプレビュー、エディター。",
+    "auth.createAccountDesc":
+      "アカウントを作成し、GafCoreで構築を始めましょう。",
+    "auth.artistName": "表示名（任意）",
+    "dash.dashboard": "IDEを開く",
+  },
+  zh: {
+    "footer.tagline": "用 AI 构建应用和网站 — 聊天、实时预览和编辑器。",
+    "auth.createAccountDesc": "创建账户，开始使用 GafCore 构建。",
+    "auth.artistName": "显示名称（可选）",
+    "dash.dashboard": "打开 IDE",
+  },
+  ko: {
+    "footer.tagline": "AI로 앱과 사이트 구축 — 채팅, 라이브 미리보기, 에디터.",
+    "auth.createAccountDesc": "계정을 만들고 GafCore로 제작을 시작하세요.",
+    "auth.artistName": "표시 이름(선택)",
+    "dash.dashboard": "IDE 열기",
+  },
+  ar: {
+    "footer.tagline":
+      "أنشئ التطبيقات والمواقع بالذكاء الاصطناعي — دردشة، معاينة مباشرة ومحرر.",
+    "auth.createAccountDesc": "أنشئ حسابك وابدأ البناء مع GafCore.",
+    "auth.artistName": "اسم العرض (اختياري)",
+    "dash.dashboard": "فتح IDE",
+  },
+};
+
+for (const [lang, p] of Object.entries(patches)) {
+  byLang[lang] = { ...byLang[lang], ...p };
+}
+
+let body = "// AUTO-GENERATED by scripts/extract-i18n-minimal.mjs — do not edit by hand\n";
+body += "export const translationsGenerated: Record<string, Record<string, string>> = {\n";
+for (const lang of langs) {
+  body += `  ${lang}: {\n`;
+  const keys = Object.keys(byLang[lang]).sort();
+  for (const k of keys) {
+    body += `    ${JSON.stringify(k)}: ${JSON.stringify(byLang[lang][k])},\n`;
+  }
+  body += "  },\n";
+}
+body += "};\n";
+
+fs.writeFileSync(OUT, body, "utf8");
+console.log("Wrote", OUT, "keys per lang:", langs.map((l) => `${l}=${Object.keys(byLang[l]).length}`).join(" "));

@@ -1,0 +1,235 @@
+import { z } from "zod";
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
+
+export const gafcoreChatBodySchema = z.object({
+  history: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant", "system"]),
+        content: z.string().max(20000),
+      }),
+    )
+    .max(20),
+  instruction: z.string().min(1).max(8000),
+  files: z
+    .array(
+      z.object({
+        name: z.string(),
+        language: z.string().optional(),
+        content: z.string(),
+      }),
+    )
+    .max(80),
+});
+
+export type GafcoreChatBody = z.infer<typeof gafcoreChatBodySchema>;
+
+export const GAFCORE_SYSTEM = `Eres el motor de generación de **GafCore**: produces software mantenible, no maquetas desechables.
+
+Pilares (aplícalos en cada cambio):
+1) **Clean Code / precisión**: código claro, nombres expresivos, DRY, sin código muerto. No añadas librerías ni utilidades que no se usen o que la instrucción no pida.
+2) **APIs modernas del stack del proyecto**: respeta el stack que ves en los archivos (p. ej. React 19 + TanStack Router/Start + Vite + Tailwind v4, o Next si el repo es Next). Usa hooks y patrones actuales; evita APIs deprecadas o estilos de framework antiguo salvo que el código existente lo imponga.
+3) **Arquitectura escalable**: al crecer UI o features, orienta a **Atomic Design** bajo \`src/components/\` (\`atoms\`, \`molecules\`, \`organisms\`, \`templates\` o equivalente ya usado en el repo). Evita un solo archivo monolítico cuando el cambio lo permite.
+4) **Razonamiento de alta calidad**: piensa como modelo clase GPT-4o / Claude 3.5 (correctitud, menos idas y vueltas): el diff debe ser coherente con imports, rutas y tipos existentes.
+5) **Rendimiento (p. ej. despliegue en Vercel)**: menos JS innecesario, componentes acotados, evita dependencias pesadas sin motivo; lazy solo cuando tenga sentido claro.
+
+Formato de salida (obligatorio):
+Responde SIEMPRE en JSON puro con esta forma exacta:
+{
+  "reply": "explicación breve para el usuario en español",
+  "files": [ { "name": "...", "language": "...", "content": "..." } ]
+}
+Reglas de **archivos (eficiencia)**:
+- En "files" incluye **solo** archivos **nuevos, creados o modificados** (delta). No repitas archivos sin cambios.
+- Si no hay cambios de código, devuelve "files": [].
+- No incluyas markdown ni triple backtick. Solo JSON válido.`;
+
+export const COST_PER_REQUEST = 1;
+
+/** Slugs compatibles con OpenRouter (o otro gateway OpenAI-compatible). */
+export const MODEL_FAST = "google/gemini-2.5-flash";
+export const MODEL_DEEP = "openai/gpt-4o";
+
+const CONTEXT_CHAR_BUDGET = 42_000;
+const PER_FILE_CONTEXT_CAP = 14_000;
+
+export type ProjFile = { name: string; language?: string; content: string };
+
+export function totalChars(files: ProjFile[]) {
+  return files.reduce((s, f) => s + f.content.length, 0);
+}
+
+function truncateForContext(f: ProjFile, max: number): ProjFile {
+  if (f.content.length <= max) return f;
+  return {
+    ...f,
+    content: `${f.content.slice(0, max)}\n\n/* …contexto truncado para el modelo… */\n`,
+  };
+}
+
+export function selectContextFiles(instruction: string, files: ProjFile[]): ProjFile[] {
+  if (totalChars(files) <= CONTEXT_CHAR_BUDGET * 0.92) {
+    return files.map((f) => truncateForContext(f, PER_FILE_CONTEXT_CAP));
+  }
+  const inst = instruction.toLowerCase();
+  const tokens = [...new Set(inst.split(/[^a-z0-9áéíóúñ_/]+/gi).filter((t) => t.length > 2))];
+  const pick = new Set<string>();
+  const always = [
+    "package.json",
+    "tsconfig.json",
+    "vite.config.ts",
+    "src/styles.css",
+    "bun.lock",
+    "bun.lockb",
+    "package-lock.json",
+  ];
+  for (const f of files) {
+    const n = f.name.toLowerCase();
+    if (always.some((a) => n === a || n.endsWith(`/${a}`))) pick.add(f.name);
+  }
+  for (const f of files) {
+    const n = f.name.toLowerCase();
+    for (const t of tokens) {
+      if (t && n.includes(t)) pick.add(f.name);
+    }
+  }
+  if (/(landing|hero|página|pagina|component|route|ruta|layout|formulario|dashboard)/i.test(inst)) {
+    for (const f of files) {
+      if (/routes\//i.test(f.name) || /\/routes\//i.test(f.name) || /components\//i.test(f.name)) {
+        pick.add(f.name);
+      }
+    }
+  }
+  if (pick.size < 5) {
+    files.slice(0, 16).forEach((f) => pick.add(f.name));
+  }
+  let out = files.filter((f) => pick.has(f.name));
+  out = out.map((f) => truncateForContext(f, PER_FILE_CONTEXT_CAP));
+  while (totalChars(out) > CONTEXT_CHAR_BUDGET && out.length > 6) {
+    out = [...out].sort((a, b) => b.content.length - a.content.length);
+    out.pop();
+  }
+  return out;
+}
+
+export function pickModel(
+  instruction: string,
+  fast: string = MODEL_FAST,
+  deep: string = MODEL_DEEP,
+): string {
+  const t = instruction.trim();
+  if (/^\[modo chat\]/i.test(t)) return fast;
+  if (t.length < 380 && !/refactor|migrat|architect|error|bug|despliegue|optimiza|seguridad|typescript|eslint|performance/i.test(t)) {
+    return fast;
+  }
+  return deep;
+}
+
+const SAFE_PATH = /^[a-zA-Z0-9_\-. /]+$/;
+const MAX_FILE_OUT = 450_000;
+
+export function validateOutputFiles(raw: unknown): ProjFile[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ProjFile[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const name = (row as ProjFile).name;
+    const content = (row as ProjFile).content;
+    const language = (row as ProjFile).language;
+    if (typeof name !== "string" || name.length === 0 || name.length > 512) continue;
+    if (name.includes("..") || !SAFE_PATH.test(name) || name.startsWith("/")) continue;
+    if (typeof content !== "string") continue;
+    if (content.length > MAX_FILE_OUT) continue;
+    out.push({
+      name,
+      language: typeof language === "string" ? language : undefined,
+      content,
+    });
+  }
+  return out;
+}
+
+function djb2(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (h * 33) ^ s.charCodeAt(i);
+  return h >>> 0;
+}
+
+export function projectCacheFingerprint(files: ProjFile[]): string {
+  const parts = files.map((f) => {
+    const head = f.content.slice(0, 600);
+    return `${f.name}:${f.content.length}:${djb2(head)}`;
+  });
+  parts.sort();
+  return parts.join(">");
+}
+
+export function instructionKey(instr: string): string {
+  const a = djb2(instr);
+  const b = djb2(instr.slice(Math.max(0, instr.length - 4000)));
+  return `${a.toString(16)}_${b.toString(16)}`;
+}
+
+export type CachedPayload = { reply: string; files: ProjFile[] };
+
+const responseCache = new Map<string, { at: number; payload: CachedPayload }>();
+const CACHE_TTL_MS = 55_000;
+const CACHE_MAX = 64;
+
+export function cacheGet(key: string): CachedPayload | null {
+  const row = responseCache.get(key);
+  if (!row) return null;
+  if (Date.now() - row.at > CACHE_TTL_MS) {
+    responseCache.delete(key);
+    return null;
+  }
+  return row.payload;
+}
+
+export function cacheSet(key: string, payload: CachedPayload) {
+  while (responseCache.size >= CACHE_MAX) {
+    const first = responseCache.keys().next().value;
+    if (first === undefined) break;
+    responseCache.delete(first);
+  }
+  responseCache.set(key, { at: Date.now(), payload });
+}
+
+export async function fetchBalance(userId: string): Promise<number | null> {
+  const { data, error } = await supabaseAdmin
+    .from("user_credits")
+    .select("balance")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) return null;
+  return typeof data?.balance === "number" ? data.balance : null;
+}
+
+export function buildGafcoreMessages(
+  data: GafcoreChatBody,
+  resolvedModel?: string,
+): {
+  messages: Array<{ role: string; content: string }>;
+  model: string;
+  subset: boolean;
+  ctxFiles: ProjFile[];
+} {
+  const model = resolvedModel ?? pickModel(data.instruction);
+  const ctxFiles = selectContextFiles(data.instruction, data.files as ProjFile[]);
+  const subset =
+    ctxFiles.length < data.files.length ||
+    totalChars(ctxFiles) < totalChars(data.files as ProjFile[]) * 0.88;
+  const subsetNote = subset
+    ? "\n\n(Nota interna: solo se listan archivos de contexto seleccionados por tamaño/relevancia. Devuelve en \"files\" únicamente deltas: archivos nuevos o modificados.)"
+    : "";
+  const filesContext = JSON.stringify(ctxFiles);
+  const messages = [
+    { role: "system", content: GAFCORE_SYSTEM },
+    ...data.history,
+    {
+      role: "user",
+      content: `Archivos de contexto:\n${filesContext}\n\nInstrucción:\n${data.instruction}${subsetNote}`,
+    },
+  ];
+  return { messages, model, subset, ctxFiles };
+}

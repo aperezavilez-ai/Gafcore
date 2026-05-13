@@ -1,0 +1,123 @@
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { Button } from "@/components/ui/button";
+import { useState } from "react";
+import { ArrowLeft, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+
+export const Route = createFileRoute("/reset-password")({
+  component: ResetPasswordPage,
+});
+
+function ResetPasswordPage() {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+
+    if (password.length < 6) {
+      setError("La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError("Las contraseñas no coinciden.");
+      return;
+    }
+
+    setLoading(true);
+    const { error: updateError } = await supabase.auth.updateUser({ password });
+    setLoading(false);
+
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+
+    setMessage("Contraseña actualizada. Ya puedes iniciar sesión.");
+    setTimeout(() => navigate({ to: "/login" }), 1200);
+  };
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <div className="w-full max-w-md">
+        <div className="mb-4">
+          <Link to="/login" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
+            <ArrowLeft size={16} />
+            Volver al login
+          </Link>
+        </div>
+
+        <div className="mb-8 text-center">
+          <div className="mb-6 flex justify-center">
+            <Link to="/gafcore" className="inline-flex items-center gap-2" aria-label="GafCore">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-lg font-bold text-primary-foreground">
+                G
+              </span>
+              <span className="text-xl font-bold text-foreground">GafCore</span>
+            </Link>
+          </div>
+          <h1 className="text-2xl font-bold text-foreground">Crear nueva contraseña</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Escribe una contraseña nueva para tu cuenta.</p>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-6">
+          {error && (
+            <div className="mb-4 rounded-lg border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+          {message && (
+            <div className="mb-4 rounded-lg border border-success/20 bg-success/10 px-4 py-3 text-sm text-success">
+              {message}
+            </div>
+          )}
+
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-foreground">Nueva contraseña</label>
+              <div className="relative">
+                <input
+                  type={showPw ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  className="h-10 w-full rounded-lg border border-input bg-background px-3 pr-10 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+                  placeholder="Mín. 6 caracteres"
+                />
+                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 z-10 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                  {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-foreground">Confirmar contraseña</label>
+              <input
+                type={showPw ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                minLength={6}
+                className="h-10 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+                placeholder="Repite la contraseña"
+              />
+            </div>
+
+            <Button type="submit" variant="hero" className="w-full" size="lg" disabled={loading}>
+              {loading ? "Guardando..." : "Guardar contraseña"} <ArrowRight size={16} />
+            </Button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}

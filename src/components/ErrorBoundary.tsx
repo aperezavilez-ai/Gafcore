@@ -1,0 +1,40 @@
+import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { AlertTriangle } from "lucide-react";
+
+type Props = { children: ReactNode; fallback?: (error: Error, reset: () => void) => ReactNode };
+type State = { error: Error | null };
+
+export class ErrorBoundary extends Component<Props, State> {
+  state: State = { error: null };
+
+  static getDerivedStateFromError(error: Error): State {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // eslint-disable-next-line no-console
+    console.error("[ErrorBoundary]", error, info);
+  }
+
+  reset = () => this.setState({ error: null });
+
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    if (this.props.fallback) return this.props.fallback(error, this.reset);
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <div className="max-w-md text-center space-y-3">
+          <AlertTriangle className="mx-auto h-10 w-10 text-destructive" />
+          <h2 className="text-xl font-semibold">Algo salió mal</h2>
+          <p className="text-sm text-muted-foreground break-words">{error.message}</p>
+          <div className="flex justify-center gap-2 pt-2">
+            <Button variant="outline" onClick={() => window.location.reload()}>Recargar</Button>
+            <Button onClick={this.reset}>Reintentar</Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}

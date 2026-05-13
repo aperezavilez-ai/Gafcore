@@ -1,0 +1,109 @@
+# Cursor Rules — GafCore
+
+Eres un asistente experto trabajando en **GafCore**: la plataforma donde los usuarios crean y gestionan **sitios web y apps** (proyectos propios). Dominio único: **gafcore.com**. Responde en español salvo que el usuario escriba en otro idioma.
+
+**GafCore** es el producto; no mezclar marca ni código con GafSuite, GafMusic, GafAds u otros proyectos.
+
+## Stack
+
+- TanStack Start v1 (React 19, SSR + server functions) sobre Vite 7
+- TanStack Router con file-based routing en `src/routes/`
+- Tailwind CSS v4 — configurado en `src/styles.css` (NO existe `tailwind.config.js`)
+- shadcn/ui sobre Radix, lucide-react, sonner, recharts
+- @tanstack/react-query para data fetching
+- Supabase (Postgres, Auth, Storage, Edge Functions) — proyecto propio / cloud
+- IA: API **OpenAI-compatible** (`src/lib/ai-chat-completions.server.ts`) — `OPENROUTER_API_KEY` o `OPENAI_API_KEY` o `AI_CHAT_COMPLETIONS_URL` + `AI_API_KEY`
+- Stripe (live) + Paddle para pagos (APIs oficiales, sin gateway de terceros)
+- SSR: TanStack Start + Nitro (p. ej. preset Vercel en `vite.config.ts`)
+- TypeScript estricto, Bun como package manager
+
+## Estructura
+
+- `src/routes/` — rutas (file-based, flat dot-separated). Layout raíz: `__root.tsx`.
+- `src/routes/api/` — server routes HTTP. Públicos en `api/public/*` (webhooks, OAuth, cron).
+- `src/components/ui/` — shadcn primitives (no editar a la ligera).
+- `src/components/ide/` — editor IDE de GafCore (Monaco).
+- `src/lib/server-fns/` y `src/lib/*.functions.ts` — server functions tipadas (`createServerFn`).
+- `src/lib/*.server.ts` — helpers solo servidor (bloqueados en bundle cliente).
+- `src/integrations/supabase/` — cliente Supabase (auto-generado, NO editar `client.ts` ni `types.ts`).
+- `src/hooks/` — React hooks reutilizables.
+- `supabase/config.toml` — config del proyecto (no tocar `project_id`).
+
+## Reglas de código
+
+### Routing
+- Usar `createFileRoute("/path")({ component })`. Naming flat: `dashboard.releases.tsx` → `/dashboard/releases`.
+- Importar de `@tanstack/react-router` (NUNCA `react-router-dom`).
+- `<Link to="/x">` con tipado estricto. Las rutas deben existir antes de enlazarlas.
+- NO editar `src/routeTree.gen.ts` (auto-generado).
+- Cada ruta de contenido con `head()` con title/description/og únicos.
+
+### Server functions
+```ts
+import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+
+export const fn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((i) => z.object({ ... }).parse(i))
+  .handler(async ({ data, context }) => {
+    const key = process.env.SECRET!; // leer dentro del handler
+    return { ok: true };
+  });
+```
+- NO romper la cadena `.inputValidator().handler()`.
+- NO ubicar functions cliente-importables bajo `src/server/` (bloqueado).
+- Functions con `requireSupabaseAuth` NO pueden usarse en `loader` de ruta pública (falla SSR).
+
+### Estilos / design system
+- NUNCA hard-codear colores (`text-white`, `bg-black`, `bg-blue-500`). Usar tokens semánticos: `bg-background`, `text-foreground`, `bg-primary`, `text-muted-foreground`, `border-border`.
+- Definir nuevos colores en `src/styles.css` con `oklch(...)`.
+- Customizar shadcn con `cva` variants, no parchando colores en sitio.
+
+### Seguridad / Supabase
+- Roles SIEMPRE en tabla `user_roles` separada + función `has_role()` `SECURITY DEFINER`. NUNCA en `profiles`.
+- RLS habilitado en toda tabla con datos de usuario.
+- NO referenciar FK a `auth.users`; usar `profiles` en `public`.
+- NO modificar schemas reservados: `auth`, `storage`, `realtime`, `supabase_functions`, `vault`.
+- Usar triggers de validación, no CHECK constraints con funciones no inmutables (`now()`).
+- NUNCA chequear admin desde `localStorage` o credenciales hard-coded.
+
+### Webhooks / endpoints públicos
+- En `src/routes/api/public/*`. Verificar firma HMAC antes de procesar. Validar payload con Zod.
+
+### Cloudflare Workers (solo si despliegas el SSR ahí)
+- NO usar: `child_process`, `sharp`, `canvas`, `puppeteer`, `fs.watch`, `os.cpus()`.
+- Sí: `fs`, `path`, `crypto`, `Buffer`, `stream`, `fetch`. WASM ok si embebido en build.
+- NO añadir paquetes Node-only (que necesiten node-gyp, .node addons, etc.).
+- NO usar `ssr.external` ni `resolve.external` en `vite.config.ts`.
+
+### IA
+- Usar `postChatCompletions` / `getAiChatConfig` desde `ai-chat-completions.server.ts`. Modelos por defecto en `gafcore-chat.shared.ts` (`MODEL_FAST` / `MODEL_DEEP`); override con `AI_MODEL_FAST` / `AI_MODEL_DEEP` en servidor.
+- Manejar 429 (rate limit) y 402 (sin créditos) con mensajes claros al usuario.
+
+## Archivos auto-generados — NO TOCAR
+
+- `src/integrations/supabase/client.ts`
+- `src/integrations/supabase/types.ts`
+- `src/routeTree.gen.ts`
+- `.env`, `.env.development`, `.env.production`
+- `supabase/config.toml` (campos `project_id` y nivel proyecto; sí puedes añadir bloques de función)
+
+## Comandos
+
+```bash
+bun install
+bun run dev          # Vite dev + HMR
+bun run build        # build prod
+bun run lint
+bun run format
+```
+
+## Comunicación
+
+- Conciso y al grano. Español por defecto.
+- Cuando edites código: explica QUÉ cambiaste y POR QUÉ en 1-2 líneas, no el cómo.
+- Antes de modificar un archivo, léelo. Nunca asumas su contenido.
+- Para cambios grandes, propón un plan corto antes.
+- Refiérete al backend como "backend" / "GafCore backend", no como detalle de proveedor al usuario final.

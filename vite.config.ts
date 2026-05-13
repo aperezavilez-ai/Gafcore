@@ -1,0 +1,63 @@
+import tailwindcss from "@tailwindcss/vite";
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import { nitro } from "nitro/vite";
+import { defineConfig, loadEnv } from "vite";
+import viteReact from "@vitejs/plugin-react";
+import tsconfigPaths from "vite-tsconfig-paths";
+
+// Producción en Vercel: Nitro + TanStack Start (sin @cloudflare/vite-plugin).
+// Wrangler sigue en el repo por si desarrollas Workers aparte; el build web usa Nitro.
+export default defineConfig(({ mode }) => {
+  const loaded = loadEnv(mode, process.cwd(), "VITE_");
+  const envDefine: Record<string, string> = {};
+  for (const [key, value] of Object.entries(loaded)) {
+    envDefine[`import.meta.env.${key}`] = JSON.stringify(value);
+  }
+
+  return {
+    define: envDefine,
+    resolve: {
+      alias: {
+        "@": `${process.cwd()}/src`,
+      },
+      dedupe: [
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+        "react/jsx-dev-runtime",
+        "@tanstack/react-query",
+        "@tanstack/query-core",
+      ],
+    },
+    // 127.0.0.1: el Simple Browser / preview de Cursor y muchos navegadores en Windows
+    // fallan o muestran pantalla en blanco con host "::" (solo IPv6).
+    server: {
+      host: "127.0.0.1",
+      port: 8080,
+      strictPort: true,
+      hmr: {
+        host: "127.0.0.1",
+        port: 8080,
+      },
+    },
+    plugins: [
+      tailwindcss(),
+      tsconfigPaths({ projects: ["./tsconfig.json"] }),
+      tanstackStart({
+        server: { entry: "server" },
+        importProtection: {
+          behavior: "error",
+          client: {
+            files: ["**/server/**"],
+            specifiers: ["server-only"],
+          },
+        },
+      }),
+      nitro({
+        // En los builds de Vercel, `VERCEL=1`: salida compatible con Fluid Compute / Functions.
+        preset: process.env.VERCEL ? "vercel" : "node-server",
+      }),
+      viteReact(),
+    ],
+  };
+});

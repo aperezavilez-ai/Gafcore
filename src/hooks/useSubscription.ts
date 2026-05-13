@@ -141,5 +141,5 @@ export function useSubscription(userId: string | undefined) {
     planTierCol,
   });
 
-  return { subscription, isActive, planName, planTier, planDisplayLabel, loading, isAdmin };
+  return { subscription, isActive, planName, planTier, planDisplayLabel, loading, isAdmin, subActive };
 }

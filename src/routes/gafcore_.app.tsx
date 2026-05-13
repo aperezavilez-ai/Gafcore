@@ -29,7 +29,7 @@ function GafCoreAppPage() {
     void (async () => {
       const id = user?.id ?? (await supabase.auth.getSession()).data.session?.user?.id;
       if (!id) return;
-      const k = `gafcore_welcome_sync_v1_${id}`;
+      const k = `gafcore_welcome_sync_v2_${id}`;
       if (typeof window !== "undefined" && sessionStorage.getItem(k)) return;
       if (typeof window !== "undefined") sessionStorage.setItem(k, "1");
       try {

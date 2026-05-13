@@ -22,7 +22,7 @@ export function useCredits(userId: string | undefined) {
     const nextAllowance = (data?.monthly_allowance as number | null) ?? 0;
     setBalance(nextBalance);
     setMonthlyAllowance(nextAllowance);
-    setIsUnlimitedDaily(nextAllowance === 1000 && nextBalance <= 1000);
+    setIsUnlimitedDaily(nextAllowance >= 1000 && nextBalance <= 1000);
     setLoading(false);
   }, [userId]);
 

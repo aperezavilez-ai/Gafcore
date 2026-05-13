@@ -135,9 +135,15 @@ async function handleSubscriptionCreated(subscription: StripeSubscriptionPayload
       p_reason: "monthly_grant",
       p_metadata: { subscription_id: subscription.id, price_id: priceId },
     });
+    /** Plan Creador: 0 créditos contables pero `consume_credits` usa monthly_allowance >= 1000 como ilimitado fair-use. */
+    const monthlyAllowance = planInfo.tier === "creador" ? 1000 : planInfo.credits;
     await getSupabase()
       .from("user_credits")
-      .update({ monthly_allowance: planInfo.credits, last_reset_at: new Date().toISOString() })
+      .update({
+        monthly_allowance: monthlyAllowance,
+        daily_limit: monthlyAllowance,
+        last_reset_at: new Date().toISOString(),
+      })
       .eq("user_id", userId);
   }
 }

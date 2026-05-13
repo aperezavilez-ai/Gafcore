@@ -81,8 +81,14 @@ type View = "preview" | "code";
 export function GafCoreIDE() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { balance, monthlyAllowance, loading: creditsLoading } = useCredits(user?.id);
-  const { isAdmin, planDisplayLabel } = useSubscription(user?.id);
+  const { balance, monthlyAllowance, loading: creditsLoading, isUnlimitedDaily } = useCredits(user?.id);
+  const { isAdmin, planDisplayLabel, subscription, subActive } = useSubscription(user?.id);
+
+  const isFairUseCreadorPlan =
+    !isAdmin &&
+    subActive &&
+    (subscription?.price_id === "plan_creador_monthly" ||
+      String(subscription?.plan_tier ?? "").toLowerCase() === "creador");
   const [files, setFiles] = useState<FileItem[]>(initialFiles);
   const [activeIndex, setActiveIndex] = useState(0);
   const [openTabs, setOpenTabs] = useState<string[]>([initialFiles[0].name]);
@@ -116,12 +122,17 @@ export function GafCoreIDE() {
   });
   const creditsLabel = isAdmin
     ? "Ilimitados ∞"
+    : isFairUseCreadorPlan || isUnlimitedDaily
+      ? "Ilimitado (fair use)"
     : creditsLoading
       ? "Cargando…"
       : monthlyAllowance > 0
         ? `${balance.toLocaleString()} de ${monthlyAllowance.toLocaleString()}`
         : `${balance.toLocaleString()} créditos`;
-  const creditsPercent = isAdmin || monthlyAllowance <= 0 ? 100 : Math.max(0, Math.min(100, (balance / monthlyAllowance) * 100));
+  const creditsPercent =
+    isAdmin || isFairUseCreadorPlan || isUnlimitedDaily || monthlyAllowance <= 0
+      ? 100
+      : Math.max(0, Math.min(100, (balance / monthlyAllowance) * 100));
 
   const refreshProjects = async () => {
     const list = await listProjects();

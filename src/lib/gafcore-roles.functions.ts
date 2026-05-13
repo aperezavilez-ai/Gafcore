@@ -2,6 +2,19 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { getStripeEnvironment } from "@/lib/stripe";
+
+function isGafcoreSubscriptionPeriodActive(row: {
+  status: string;
+  current_period_end: string | null;
+} | null): boolean {
+  if (!row) return false;
+  const end = row.current_period_end ? new Date(row.current_period_end) : null;
+  return !!(
+    (["active", "trialing", "past_due"].includes(row.status) && (!end || end > new Date())) ||
+    (row.status === "canceled" && end && end > new Date())
+  );
+}
 
 const inputSchema = z.object({
   accountType: z.enum(["user", "demo", "admin"]),
@@ -58,14 +71,48 @@ export const assignGafcoreAccountType = createServerFn({ method: "POST" })
       return { ok: true, role: "demo" as const };
     }
 
-    /** Usuario normal: si saldo 0 y nunca hubo movimientos, otorgar 10 de bienvenida (evita filas 0 por re-registro / trigger). */
+    /** Usuario normal: reparar monthly_allowance en 0 (p. ej. plan Creador vía Stripe); bienvenida si saldo 0 sin movimientos. */
     if (accountType === "user") {
-      const { data: creditRow } = await supabaseAdmin
+      const { data: creditRow, error: creditErr } = await supabaseAdmin
+        .from("user_credits")
+        .select("balance, monthly_allowance, daily_limit")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (creditErr) throw new Error(creditErr.message);
+
+      const monthly = creditRow?.monthly_allowance ?? 0;
+      if (creditRow && monthly === 0) {
+        const env = getStripeEnvironment();
+        const { data: sub, error: subErr } = await supabaseAdmin
+          .from("subscriptions")
+          .select("status, current_period_end, price_id, plan_tier")
+          .eq("user_id", userId)
+          .eq("environment", env)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (subErr) throw new Error(subErr.message);
+
+        const subOk = isGafcoreSubscriptionPeriodActive(sub);
+        const isCreadorFairUse =
+          subOk &&
+          (sub?.price_id === "plan_creador_monthly" ||
+            String(sub?.plan_tier ?? "").toLowerCase() === "creador");
+
+        const patch = isCreadorFairUse
+          ? { monthly_allowance: 1000, daily_limit: 1000 }
+          : { monthly_allowance: 10, daily_limit: 10 };
+
+        const { error: repairErr } = await supabaseAdmin.from("user_credits").update(patch).eq("user_id", userId);
+        if (repairErr) throw new Error(repairErr.message);
+      }
+
+      const { data: balRow } = await supabaseAdmin
         .from("user_credits")
         .select("balance")
         .eq("user_id", userId)
         .maybeSingle();
-      const bal = creditRow?.balance ?? 0;
+      const bal = balRow?.balance ?? 0;
       if (bal === 0) {
         const { count, error: countErr } = await supabaseAdmin
           .from("credit_transactions")

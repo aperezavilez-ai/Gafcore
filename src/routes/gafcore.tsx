@@ -144,7 +144,7 @@ function GafCoreLanding() {
               <Link to="/gafcore/login" search={{ redirect: "/gafcore/app" }}>{t("gc.auth.login")}</Link>
             </Button>
             <Button asChild size="sm" className="gc-cta rounded-full px-4">
-              <Link to="/gafcore/register" search={{ redirect: "/gafcore/app" }}>{t("gc.auth.register")}</Link>
+              <Link to="/gafcore/register" search={{ redirect: "/gafcore#planes" }}>{t("gc.auth.register")}</Link>
             </Button>
           </div>
         </div>
@@ -251,7 +251,13 @@ function GafCoreLanding() {
                   </ul>
                   <Button
                     onClick={() => {
-                      if (plan.id === "free") { navigate({ to: "/gafcore/register", search: { redirect: "/gafcore/app" } }); return; }
+                      if (plan.id === "free") {
+                        navigate({
+                          to: "/gafcore/register",
+                          search: { plan: "free", redirect: "/gafcore/app" },
+                        });
+                        return;
+                      }
                       choosePlan(plan.id);
                     }}
                     className={highlight ? "w-full gc-cta" : "w-full"}

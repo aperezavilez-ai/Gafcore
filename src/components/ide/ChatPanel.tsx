@@ -389,6 +389,11 @@ export function ChatPanel({
   const send = async (text?: string) => {
     const raw = (text ?? input).trim();
     if (!raw) return;
+    if (!isUnlimitedDaily && !creditsLoading && user?.id && balance <= 0) {
+      toast.error("No tienes créditos. Compra un paquete para seguir usando la IA.");
+      setCreditsOut(true);
+      return;
+    }
     const prefix = visualEditOn
       ? "[Edición visual] Enfócate solo en cambios de UI/estilos sin tocar lógica. "
       : mode === "chat"
@@ -853,6 +858,11 @@ export function ChatPanel({
         userId={user?.id}
         userEmail={user?.email}
         reason="insufficient"
+        returnUrl={
+          typeof window !== "undefined"
+            ? `${window.location.origin}/gafcore/app?credits=success&session_id={CHECKOUT_SESSION_ID}`
+            : "/gafcore/app"
+        }
       />
     </div>
   );

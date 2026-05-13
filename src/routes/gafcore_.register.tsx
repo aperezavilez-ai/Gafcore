@@ -32,7 +32,14 @@ function GafCoreRegisterPage() {
   const light = false;
   const navigate = useNavigate();
   const { plan, redirect } = Route.useSearch();
-  const redirectTo = redirect || (plan ? `/gafcore?plan=${encodeURIComponent(plan)}` : "/gafcore/app");
+  /** Tras verificar correo: pago → checkout en inicio; gratis → app; sin elección → tabla de planes. */
+  const redirectTo =
+    redirect ??
+    (plan === "free"
+      ? "/gafcore/app"
+      : plan
+        ? `/gafcore?plan=${encodeURIComponent(plan)}`
+        : "/gafcore#planes");
   const assignRole = useServerFn(assignGafcoreAccountType);
 
   const accountType: AccountType = "user";

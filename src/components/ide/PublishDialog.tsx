@@ -276,6 +276,13 @@ export function PublishDialog({
                 </>
               )}
             </Button>
+            <p className="text-center text-xs text-muted-foreground leading-relaxed">
+              Esto sube los archivos del IDE al <strong className="text-foreground">repo de GitHub</strong> que
+              configuraste. Vercel construye <strong className="text-foreground">ese repo</strong>, no la carpeta
+              de tu PC (Cursor): ahí usa{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">npm run gafcore:push</code> o{" "}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">bun run gafcore:push</code>.
+            </p>
             <Button
               variant="ghost"
               size="sm"

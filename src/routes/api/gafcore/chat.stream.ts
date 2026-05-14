@@ -9,9 +9,8 @@ import {
   instructionKey,
   projectCacheFingerprint,
   COST_PER_REQUEST,
-  MODEL_FAST,
-  MODEL_DEEP,
   pickModel,
+  resolveGafcoreModelDefaults,
   type ProjFile,
 } from "@/lib/gafcore-chat.shared";
 import { getAiChatConfig, postChatCompletions } from "@/lib/ai-chat-completions.server";
@@ -48,8 +47,9 @@ export const Route = createFileRoute("/api/gafcore/chat/stream")({
         }
         const data = parsed.data;
 
+        let aiCfg: ReturnType<typeof getAiChatConfig>;
         try {
-          getAiChatConfig();
+          aiCfg = getAiChatConfig();
         } catch {
           return new Response(JSON.stringify({ error: "ai_not_configured" }), {
             status: 500,
@@ -57,8 +57,9 @@ export const Route = createFileRoute("/api/gafcore/chat/stream")({
           });
         }
 
-        const fast = process.env.AI_MODEL_FAST ?? MODEL_FAST;
-        const deep = process.env.AI_MODEL_DEEP ?? MODEL_DEEP;
+        const defaults = resolveGafcoreModelDefaults(aiCfg.url);
+        const fast = process.env.AI_MODEL_FAST?.trim() || defaults.fast;
+        const deep = process.env.AI_MODEL_DEEP?.trim() || defaults.deep;
         const { messages, model, subset, ctxFiles } = buildGafcoreMessages(
           data,
           pickModel(data.instruction, fast, deep),

@@ -1,18 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import "@tanstack/react-start";
 import { requireUser } from "./elevenlabs/-_auth";
-import { MODEL_FAST, MODEL_DEEP } from "@/lib/gafcore-chat.shared";
+import { resolveGafcoreModelDefaults } from "@/lib/gafcore-chat.shared";
 import { getAiChatConfig, postChatCompletions } from "@/lib/ai-chat-completions.server";
 
-type Mode = "fast" | "reasoning" | "pro";
-
-const MODEL_BY_MODE: Record<Mode, string> = {
-  fast: MODEL_FAST,
-  reasoning: MODEL_DEEP,
-  pro: MODEL_DEEP,
-};
-
 const SYSTEM_PROMPT = `Eres GafCore AI, asistente de la plataforma de creación con IA. Responde en español de forma clara, breve y útil. Usa markdown cuando ayude.`;
+
+type Mode = "fast" | "reasoning" | "pro";
 
 export const Route = createFileRoute("/api/chat")({
   server: {
@@ -21,14 +15,22 @@ export const Route = createFileRoute("/api/chat")({
         const auth = await requireUser(request);
         if (auth instanceof Response) return auth;
 
+        let aiCfg: ReturnType<typeof getAiChatConfig>;
         try {
-          getAiChatConfig();
+          aiCfg = getAiChatConfig();
         } catch {
           return new Response(JSON.stringify({ error: "AI not configured" }), {
             status: 500,
             headers: { "Content-Type": "application/json" },
           });
         }
+
+        const { fast, deep } = resolveGafcoreModelDefaults(aiCfg.url);
+        const MODEL_BY_MODE: Record<Mode, string> = {
+          fast,
+          reasoning: deep,
+          pro: deep,
+        };
 
         let body: { messages?: Array<{ role: string; content: string }>; mode?: Mode };
         try {

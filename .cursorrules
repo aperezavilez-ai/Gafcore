@@ -107,3 +107,12 @@ bun run format
 - Antes de modificar un archivo, léelo. Nunca asumas su contenido.
 - Para cambios grandes, propón un plan corto antes.
 - Refiérete al backend como "backend" / "GafCore backend", no como detalle de proveedor al usuario final.
+- **Al finalizar una tarea sustantiva:** incluir siempre un bloque **«Qué sigue (propuesta)»** con 1–3 pasos concretos (siguiente comando, panel a tocar, o verificación).
+
+## Modo de ejecución (preferencia de producto)
+
+- Priorizar **acción con herramientas** (terminal, lectura/edición de archivos, lint/build) frente a pedir al usuario que copie/pegué o ejecute lo que el agente puede hacer en el repo.
+- Si un comando falla: leer el error, corregir y reintentar cuando el fallo sea local al proyecto.
+- **Límites:** no iniciar sesión en cuentas del usuario (Supabase/Vercel/GitHub/OpenAI); no escribir secretos en `.env` / `.env.*` (archivos ignorados o reglas del repo); no `git push` con credenciales ajenas.
+
+> **Cómo persisten estas reglas:** Cursor carga `.cursorrules` en cada chat de este workspace. Para instrucciones **globales** (todos los proyectos): *Cursor Settings → Rules for AI / User Rules*.

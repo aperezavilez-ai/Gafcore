@@ -12,27 +12,29 @@ import {
   instructionKey,
   projectCacheFingerprint,
   COST_PER_REQUEST,
-  MODEL_FAST,
-  MODEL_DEEP,
   pickModel,
+  resolveGafcoreModelDefaults,
   type ProjFile,
 } from "@/lib/gafcore-chat.shared";
 import { getAiChatConfig, postChatCompletions } from "@/lib/ai-chat-completions.server";
 import { isGafcoreAdminUser } from "@/lib/gafcore-admin-role.server";
+import { sanitizeUserFacingAiText } from "@/lib/gafcore-user-facing-errors";
 
 export const gafcoreChat = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input) => gafcoreChatBodySchema.parse(input))
   .handler(async ({ data, context }) => {
     const t0 = Date.now();
+    let aiCfg: ReturnType<typeof getAiChatConfig>;
     try {
-      getAiChatConfig();
+      aiCfg = getAiChatConfig();
     } catch {
       throw new Error("AI no configurado");
     }
 
-    const fast = process.env.AI_MODEL_FAST ?? MODEL_FAST;
-    const deep = process.env.AI_MODEL_DEEP ?? MODEL_DEEP;
+    const defaults = resolveGafcoreModelDefaults(aiCfg.url);
+    const fast = process.env.AI_MODEL_FAST?.trim() || defaults.fast;
+    const deep = process.env.AI_MODEL_DEEP?.trim() || defaults.deep;
     const { messages, model, subset, ctxFiles } = buildGafcoreMessages(
       data,
       pickModel(data.instruction, fast, deep),
@@ -55,10 +57,11 @@ export const gafcoreChat = createServerFn({ method: "POST" })
           filesOut: cached.files.length,
         }),
       );
-      return { reply: cached.reply, files: cached.files, balance: bal };
+      return { reply: sanitizeUserFacingAiText(cached.reply), files: cached.files, balance: bal };
     }
 
     const skipCredits = await isGafcoreAdminUser(context.userId);
+    let balanceAfterConsume: number | null = null;
     if (!skipCredits) {
       const { data: credit, error: creditErr } = await supabaseAdmin.rpc("consume_credits", {
         p_user_id: context.userId,
@@ -80,6 +83,7 @@ export const gafcoreChat = createServerFn({ method: "POST" })
         err.code = "INSUFFICIENT_CREDITS";
         throw err;
       }
+      balanceAfterConsume = (credit as { balance?: number } | null)?.balance ?? null;
     }
 
     const res = await postChatCompletions({
@@ -128,11 +132,15 @@ export const gafcoreChat = createServerFn({ method: "POST" })
           parseError: true,
         }),
       );
-      return { reply: content, files: [], balance: (credit as any)?.balance };
+      return {
+        reply: sanitizeUserFacingAiText(content),
+        files: [],
+        balance: balanceAfterConsume,
+      };
     }
 
     const safeFiles = validateOutputFiles(parsed.files);
-    const reply = typeof parsed.reply === "string" ? parsed.reply : "Listo.";
+    const reply = sanitizeUserFacingAiText(typeof parsed.reply === "string" ? parsed.reply : "Listo.");
 
     cacheSet(cacheKey, { reply, files: safeFiles });
 
@@ -153,6 +161,6 @@ export const gafcoreChat = createServerFn({ method: "POST" })
     return {
       reply,
       files: safeFiles,
-      balance: (credit as any)?.balance,
+      balance: balanceAfterConsume,
     };
   });

@@ -23,14 +23,43 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/hooks/useAuth";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useCredits } from "@/hooks/useCredits";
 import { getCurrentProjectId, renameProject, listProjects } from "@/lib/userSupabase";
 import { getIdeConfig, setIdeConfig } from "@/lib/ideConfig";
 import { supabase } from "@/integrations/supabase/client";
+import { getStripeEnvironment } from "@/lib/stripe";
+import { createStripeCustomerPortalSession } from "@/lib/server-fns/payments.functions";
+import { displayMonthlyAllowanceForUi } from "@/lib/gafcore-plan-credits.shared";
+import { Badge } from "@/components/ui/badge";
+
+const SETTINGS_SECTION_IDS = [
+  "project",
+  "domains",
+  "git",
+  "workspace",
+  "people",
+  "plans",
+  "cloud",
+  "wsdomains",
+  "privacy",
+  "devices",
+] as const;
+type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
+
+function parseSettingsSection(search: Record<string, unknown>): SettingsSectionId | undefined {
+  const raw = search.section;
+  if (typeof raw !== "string") return undefined;
+  return SETTINGS_SECTION_IDS.includes(raw as SettingsSectionId) ? (raw as SettingsSectionId) : undefined;
+}
 
 export const Route = createFileRoute("/gafcore_/settings/project")({
+  validateSearch: (search: Record<string, unknown>): { section?: SettingsSectionId } => {
+    const section = parseSettingsSection(search);
+    return section ? { section } : {};
+  },
   component: ProjectSettingsPage,
   head: () => ({ meta: [{ title: "Configuración del proyecto — GafCore" }] }),
 });
@@ -60,6 +89,7 @@ const SIDEBAR_GROUPS = [
 
 function ProjectSettingsPage() {
   const navigate = useNavigate();
+  const { section: sectionFromSearch } = Route.useSearch();
   const { user, loading: authLoading } = useAuth();
   const { isAdmin } = useSubscription(user?.id);
   const { balance } = useCredits(user?.id);
@@ -68,7 +98,11 @@ function ProjectSettingsPage() {
   const [draftName, setDraftName] = useState("GafCore");
   const [subdomain] = useState("gafcore");
   const [createdAt, setCreatedAt] = useState<string>("—");
-  const [activeSection, setActiveSection] = useState("project");
+  const [activeSection, setActiveSection] = useState<string>(() => sectionFromSearch ?? "project");
+
+  useEffect(() => {
+    if (sectionFromSearch) setActiveSection(sectionFromSearch);
+  }, [sectionFromSearch]);
   const [messageCount] = useState(350);
   const [editsCount] = useState(175);
 
@@ -93,9 +127,15 @@ function ProjectSettingsPage() {
       toast.error("Sin proyecto activo");
       return;
     }
-    const ok = await renameProject(id, draftName);
+    const next = draftName.trim();
+    if (!next) {
+      toast.error("El nombre no puede estar vacío");
+      return;
+    }
+    const ok = await renameProject(id, next);
     if (ok) {
-      setProjectName(draftName);
+      setProjectName(next);
+      setDraftName(next);
       setEditingName(false);
       toast.success("Nombre actualizado");
     } else {
@@ -148,7 +188,14 @@ function ProjectSettingsPage() {
                 return (
                   <button
                     key={item.id}
-                    onClick={() => setActiveSection(item.id)}
+                    onClick={() => {
+                      setActiveSection(item.id);
+                      void navigate({
+                        to: "/gafcore/settings/project",
+                        search: { section: item.id as SettingsSectionId },
+                        replace: true,
+                      });
+                    }}
                     className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition ${
                       active ? "bg-primary/10 font-medium text-primary" : "text-foreground/80 hover:bg-muted"
                     }`}
@@ -220,7 +267,7 @@ function SectionPanel(p: PanelProps) {
     case "git": return <GitPanel />;
     case "workspace": return <WorkspacePanel email={p.user.email ?? ""} isAdmin={p.isAdmin} />;
     case "people": return <PeoplePanel isAdmin={p.isAdmin} />;
-    case "plans": return <PlansPanel isAdmin={p.isAdmin} balance={p.balance} />;
+    case "plans": return <PlansPanel userId={p.user.id} />;
     case "cloud": return <CloudPanel />;
     case "wsdomains": return <DomainsPanel subdomain={p.subdomain} workspace />;
     case "privacy": return <PrivacyPanel />;
@@ -248,19 +295,47 @@ function ProjectOverviewPanel(p: PanelProps) {
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
           <Field label="Nombre del proyecto">
             {p.editingName ? (
-              <div className="flex gap-2">
-                <Input value={p.draftName} onChange={(e) => p.setDraftName(e.target.value)} className="h-8" />
-                <Button size="sm" onClick={p.saveName}>Guardar</Button>
-                <Button size="sm" variant="ghost" onClick={() => { p.setEditingName(false); p.setDraftName(p.projectName); }}>Cancelar</Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={p.draftName}
+                  onChange={(e) => p.setDraftName(e.target.value)}
+                  className="h-9 min-w-[12rem] max-w-md flex-1"
+                  autoFocus
+                  aria-label="Nuevo nombre del proyecto"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void p.saveName();
+                    }
+                    if (e.key === "Escape") {
+                      p.setEditingName(false);
+                      p.setDraftName(p.projectName);
+                    }
+                  }}
+                />
+                <Button type="button" size="sm" onClick={() => void p.saveName()}>
+                  Guardar
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    p.setEditingName(false);
+                    p.setDraftName(p.projectName);
+                  }}
+                >
+                  Cancelar
+                </Button>
               </div>
             ) : (
-              <button
-                onClick={() => p.setEditingName(true)}
-                className="group flex items-center gap-1.5 text-left text-sm font-medium hover:text-primary"
-              >
-                {p.projectName}
-                <Pencil className="h-3.5 w-3.5 opacity-0 transition group-hover:opacity-100" />
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-foreground">{p.projectName}</span>
+                <Button type="button" size="sm" variant="outline" onClick={() => p.setEditingName(true)}>
+                  <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                  Cambiar nombre
+                </Button>
+              </div>
             )}
           </Field>
           <Field label="Dominio">
@@ -421,25 +496,159 @@ function PeoplePanel({ isAdmin }: { isAdmin: boolean }) {
   );
 }
 
-function PlansPanel({ isAdmin, balance }: { isAdmin: boolean; balance: number }) {
+function PlansPanel({ userId }: { userId: string }) {
+  const { subscription, planDisplayLabel, loading: subLoading, subActive, isAdmin } = useSubscription(userId);
+  const { balance, monthlyAllowance, loading: creditsLoading } = useCredits(userId);
+  const displayMonthly = displayMonthlyAllowanceForUi({ isAdmin, subActive, monthlyAllowance });
+  const stripeEnv = getStripeEnvironment();
+  const createPortal = useServerFn(createStripeCustomerPortalSession);
+  const [portalLoading, setPortalLoading] = useState(false);
+
+  const creditLine = isAdmin
+    ? "Ilimitados ∞"
+    : creditsLoading
+      ? "…"
+      : `${balance.toLocaleString()} / ${displayMonthly.toLocaleString()} (referencia plan)`;
+
+  const periodEnd =
+    subscription?.current_period_end != null
+      ? new Date(subscription.current_period_end).toLocaleDateString("es", { dateStyle: "medium" })
+      : null;
+
+  const subStatusLabel = subscription?.status
+    ? String(subscription.status).replace(/_/g, " ")
+    : subActive
+      ? "activa"
+      : "sin suscripción de pago";
+
+  const hasStripeCustomer = Boolean(subscription?.stripe_customer_id);
+
+  const openStripePortal = async () => {
+    setPortalLoading(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) {
+        toast.error("Sesión caducada. Vuelve a iniciar sesión.");
+        return;
+      }
+      const returnUrl = `${window.location.origin}/gafcore/settings/project?section=plans`;
+      const res = await createPortal({
+        data: {
+          accessToken: token,
+          returnUrl,
+          environment: stripeEnv,
+        },
+      });
+      window.location.href = res.url;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("GAFCORE_NO_STRIPE_CUSTOMER")) {
+        toast.message("Aún no tienes facturación Stripe en esta cuenta", {
+          description:
+            "Contrata un plan de pago desde «Ver planes y precios» (checkout Stripe). Tras el primer pago podrás abrir el portal de facturas, métodos de pago y cancelación.",
+        });
+      } else {
+        toast.error(msg || "No se pudo abrir el portal de Stripe. Si acabas de desplegar, configura el Customer Portal en el dashboard de Stripe.");
+      }
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
   return (
     <>
-      <PanelHeader title="Planes y créditos" subtitle="Consulta tu plan, créditos disponibles y opciones de pago." />
-      <section className="mt-6 rounded-xl border bg-card p-6 space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Plan actual"><span className="text-sm font-medium">{isAdmin ? "Admin (interno)" : "Free"}</span></Field>
-          <Field label="Créditos disponibles"><span className="text-sm font-medium">{isAdmin ? "Ilimitados ∞" : balance.toLocaleString()}</span></Field>
+      <div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <h1 className="text-2xl font-semibold tracking-tight">Pagos y planes</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary" className="text-xs font-normal">
+              Stripe · {stripeEnv === "sandbox" ? "prueba" : "producción"}
+            </Badge>
+            <Button variant="outline" size="sm" className="h-8 text-xs" asChild>
+              <a
+                href="https://stripe.com/docs/customer-management"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Cómo funcionan los pagos
+                <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+              </a>
+            </Button>
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Conecta Stripe: portal de cliente para facturas, tarjetas y suscripción. GafCore sincroniza plan y créditos con webhooks.
+        </p>
+      </div>
+
+      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Plan</p>
+          <p className="mt-1 text-lg font-semibold text-foreground">
+            {subLoading ? "…" : isAdmin ? "Administrador (interno)" : planDisplayLabel}
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {periodEnd
+              ? `Próxima renovación o fin de periodo: ${periodEnd}`
+              : "Sin periodo de facturación activo o datos pendientes de sincronizar."}
+          </p>
+        </section>
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Créditos de IA</p>
+          <p className="mt-1 text-lg font-semibold tabular-nums text-foreground">{creditLine}</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Los cargos de uso de modelos se descuentan de tu saldo; los planes de pago amplían cupos mensuales.
+          </p>
+        </section>
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Suscripción</p>
+          <p className="mt-1 text-lg font-semibold capitalize text-foreground">{subLoading ? "…" : subStatusLabel}</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {subscription?.paddle_subscription_id && !subscription?.stripe_subscription_id
+              ? "Suscripción gestionada con Paddle en algunos flujos legacy. Para Stripe, usa el portal cuando exista cliente vinculado."
+              : subscription?.stripe_subscription_id
+                ? `Stripe sub: ${subscription.stripe_subscription_id.slice(0, 14)}…`
+                : "Sin suscripción Stripe registrada para este usuario."}
+          </p>
+        </section>
+        <section className="rounded-xl border border-border bg-card p-5 shadow-sm">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Facturación</p>
+          <p className="mt-1 text-lg font-semibold text-foreground">Portal de cliente</p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Facturas PDF, métodos de pago y cancelación del plan se gestionan en el portal seguro de Stripe (no almacenamos tu tarjeta en GafCore).
+          </p>
+        </section>
+      </div>
+
+      <section className="mt-6 rounded-xl border border-border bg-muted/30 p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <Button
+            type="button"
+            disabled={portalLoading || subLoading}
+            onClick={() => void openStripePortal()}
+            className="gap-2"
+          >
+            <CreditCard className="h-4 w-4" />
+            {portalLoading ? "Conectando…" : "Gestionar pagos en Stripe"}
+          </Button>
+          <Button variant="secondary" asChild>
             <Link to="/gafcore" hash="planes">
-              Ver planes
+              Ver planes y precios
             </Link>
           </Button>
           <Button variant="outline" asChild>
-            <a href="mailto:soporte@gafcore.com">Facturación y soporte</a>
+            <a href="mailto:soporte@gafcore.com?subject=Facturación%20GafCore">Soporte de facturación</a>
           </Button>
         </div>
+        {!hasStripeCustomer && !subLoading ? (
+          <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
+            El portal de Stripe se activa cuando exista un{" "}
+            <span className="font-medium text-foreground">cliente Stripe</span> en tu cuenta
+            (tras completar un checkout de plan con tarjeta). Plan gratis y solo créditos de bienvenida no generan ese enlace hasta
+            que haya un pago Stripe registrado en webhooks.
+          </p>
+        ) : null}
       </section>
     </>
   );

@@ -4,14 +4,6 @@ import { supabase as defaultSupabase } from "@/integrations/supabase/client";
 
 const CFG_KEY = "ide.supabase.config";
 const PROJECT_KEY = "ide.project.id";
-const PROJECT_NAME = "Nuevo Proyecto";
-const SEEDED_KEY = "ide.projects.seeded";
-
-// GafCore es la plataforma; cada usuario tiene su propio proyecto en backend.
-// Los proyectos son los que el usuario crea dentro de GafCore.
-const ECOSYSTEM_PROJECTS = [
-  { name: "GafCore", description: "Plantilla y documentación de la plataforma GafCore (creación con IA)." },
-];
 
 let cached: { url: string; key: string; client: SupabaseClient } | null = null;
 
@@ -51,17 +43,14 @@ export async function ensureProjectId(): Promise<string | null> {
   // Validate cached id actually exists in the projects table
   const cachedId = localStorage.getItem(PROJECT_KEY);
   if (cachedId) {
-    const { data: check } = await sb
-      .from("projects")
-      .select("id")
-      .eq("id", cachedId)
-      .maybeSingle();
+    const { data: check } = await sb.from("projects").select("id").eq("id", cachedId).maybeSingle();
     if (check?.id) return check.id as string;
     // Stale cache — clear and continue
     localStorage.removeItem(PROJECT_KEY);
   }
 
-  // Try to find any existing project, else create one
+  // Si no hay caché válida, enlazar al proyecto más reciente del usuario (RLS).
+  // No insertar proyectos aquí: el usuario crea con «+ Nuevo» o importación.
   const { data: existing } = await sb
     .from("projects")
     .select("id")
@@ -74,68 +63,14 @@ export async function ensureProjectId(): Promise<string | null> {
     return existing.id as string;
   }
 
-  const { data: userRes } = await sb.auth.getUser();
-  const userId = userRes?.user?.id;
-  const payload: Record<string, unknown> = { name: PROJECT_NAME };
-  if (userId) payload.user_id = userId;
-  const { data: created, error } = await sb
-    .from("projects")
-    .insert(payload)
-    .select("id")
-    .single();
-
-  if (error || !created) {
-    console.error("[Supabase] create project error:", error);
-    return null;
-  }
-  localStorage.setItem(PROJECT_KEY, created.id);
-  return created.id as string;
+  return null;
 }
 
 export type ProjectRow = { id: string; name: string; created_at?: string };
 
-async function seedEcosystemProjects(sb: SupabaseClient) {
-  try {
-    const { data: existing } = await sb
-      .from("projects")
-      .select("id, name, created_at")
-      .order("created_at", { ascending: true });
-    const rows = (existing ?? []) as Array<{ id: string; name: string }>;
-    const byName = (n: string) =>
-      rows.find((r) => (r.name ?? "").trim().toLowerCase() === n.toLowerCase());
-
-    // GafCore es la PLATAFORMA, no un proyecto. Renombrar filas legacy
-    // creadas automáticamente ("GafCore" o "AI Studio Project") al nombre
-    // del ecosistema disponible o a "Nuevo Proyecto".
-    const legacyNames = new Set(["gafcore", "ai studio project"]);
-    const legacy = rows.filter((r) =>
-      legacyNames.has((r.name ?? "").trim().toLowerCase()),
-    );
-    for (const row of legacy) {
-      const target = ECOSYSTEM_PROJECTS.find((p) => !byName(p.name));
-      const newName = target?.name ?? "Nuevo Proyecto";
-      await sb.from("projects").update({ name: newName }).eq("id", row.id);
-      row.name = newName;
-    }
-
-    // 2) Insert any still-missing ecosystem projects
-    const toCreate = ECOSYSTEM_PROJECTS.filter((p) => !byName(p.name));
-    if (toCreate.length > 0) {
-      const { data: userRes } = await sb.auth.getUser();
-      const userId = userRes?.user?.id;
-      const rows = toCreate.map((p) => (userId ? { ...p, user_id: userId } : p));
-      await sb.from("projects").insert(rows);
-    }
-    localStorage.setItem(SEEDED_KEY, "1");
-  } catch (e) {
-    console.warn("[Supabase] seed projects skipped:", e);
-  }
-}
-
 export async function listProjects(): Promise<ProjectRow[]> {
   const sb = getUserSupabase();
   if (!sb) return [];
-  await seedEcosystemProjects(sb);
   const { data, error } = await sb
     .from("projects")
     .select("id, name, created_at")
@@ -191,6 +126,12 @@ export function setCurrentProjectId(id: string) {
   } catch {}
 }
 
+export function clearCurrentProjectId() {
+  try {
+    localStorage.removeItem(PROJECT_KEY);
+  } catch {}
+}
+
 export async function loadProjectFiles(): Promise<FileItem[] | null> {
   const sb = getUserSupabase();
   if (!sb) return null;
@@ -221,10 +162,7 @@ export async function saveProjectFiles(files: FileItem[]): Promise<boolean> {
   if (!projectId) return false;
 
   // Replace all files for this project
-  const { error: delErr } = await sb
-    .from("project_files")
-    .delete()
-    .eq("project_id", projectId);
+  const { error: delErr } = await sb.from("project_files").delete().eq("project_id", projectId);
   if (delErr) {
     console.error("[Supabase] delete files error:", delErr);
     return false;
@@ -347,7 +285,11 @@ export async function listSecrets(): Promise<SecretRow[]> {
   return (data ?? []) as SecretRow[];
 }
 
-export async function upsertSecret(name: string, value: string, description?: string): Promise<boolean> {
+export async function upsertSecret(
+  name: string,
+  value: string,
+  description?: string,
+): Promise<boolean> {
   const sb = getUserSupabase();
   if (!sb) return false;
   const projectId = await ensureProjectId();
@@ -355,20 +297,21 @@ export async function upsertSecret(name: string, value: string, description?: st
   const { data: userRes } = await sb.auth.getUser();
   const userId = userRes?.user?.id;
   if (!userId) return false;
-  const cleanName = name.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+  const cleanName = name
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "_");
   if (!cleanName) return false;
-  const { error } = await sb
-    .from("project_secrets")
-    .upsert(
-      {
-        project_id: projectId,
-        user_id: userId,
-        name: cleanName,
-        value,
-        description: description ?? null,
-      },
-      { onConflict: "project_id,name" },
-    );
+  const { error } = await sb.from("project_secrets").upsert(
+    {
+      project_id: projectId,
+      user_id: userId,
+      name: cleanName,
+      value,
+      description: description ?? null,
+    },
+    { onConflict: "project_id,name" },
+  );
   if (error) {
     console.error("[Supabase] upsert secret error:", error);
     return false;
@@ -523,7 +466,10 @@ export async function updatePublishRecord(
 ): Promise<boolean> {
   const sb = getUserSupabase();
   if (!sb) return false;
-  const { error } = await sb.from("project_publishes").update(patch as any).eq("id", id);
+  const { error } = await sb
+    .from("project_publishes")
+    .update(patch as any)
+    .eq("id", id);
   if (error) {
     console.error("[Supabase] update project_publishes error:", error);
     return false;

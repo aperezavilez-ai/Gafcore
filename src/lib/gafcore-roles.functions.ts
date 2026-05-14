@@ -108,6 +108,17 @@ export const assignGafcoreAccountType = createServerFn({ method: "POST" })
         if (normErr) throw new Error(normErr.message);
       }
 
+      /** Saldo parcial (1–9) sin movimientos: alinea a 10 créditos gratis sin duplicar transacciones de bienvenida. */
+      if (!subOk && (txCount ?? 0) === 0 && initialBal > 0 && initialBal < 10) {
+        const { error: topErr } = await supabaseAdmin.rpc("add_credits", {
+          p_user_id: userId,
+          p_amount: 10 - initialBal,
+          p_reason: "free_tier_align",
+          p_metadata: { from_balance: initialBal } as never,
+        });
+        if (topErr) throw new Error(topErr.message);
+      }
+
       const { data: creditRow, error: creditErr } = await supabaseAdmin
         .from("user_credits")
         .select("balance, monthly_allowance, daily_limit")

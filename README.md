@@ -32,7 +32,10 @@ bun run build:dev      # build en modo development (sourcemaps, sin minify)
 bun run preview        # sirve el build de producción local
 bun run lint           # ESLint
 bun run format         # Prettier --write .
+bun run gafcore:doctor # revisa .env (Supabase + IA), sin mostrar secretos
 ```
+
+Si no tienes Bun en el PATH: `npm run gafcore:doctor`, `npm run dev`, etc.
 
 ---
 

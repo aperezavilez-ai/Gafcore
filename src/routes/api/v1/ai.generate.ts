@@ -4,14 +4,14 @@ import { z } from "zod";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { jsonOk, jsonError, requireApiAuth, requireScope } from "./-_auth";
 import { enforceRateLimit, AI_LIMIT } from "./-_ratelimit";
-import { MODEL_FAST } from "@/lib/gafcore-chat.shared";
+import { resolveGafcoreModelDefaults } from "@/lib/gafcore-chat.shared";
 import { getAiChatConfig, postChatCompletions } from "@/lib/ai-chat-completions.server";
 import { isGafcoreAdminUser } from "@/lib/gafcore-admin-role.server";
 
 const BodySchema = z.object({
   prompt: z.string().min(1).max(8000),
   system: z.string().max(4000).optional(),
-  model: z.string().min(1).max(120).optional().default(MODEL_FAST),
+  model: z.string().min(1).max(120).optional(),
   json: z.boolean().optional(),
   module: z.string().min(1).max(64).optional().default("api"),
   save: z.boolean().optional().default(false),
@@ -43,15 +43,20 @@ export const Route = createFileRoute("/api/v1/ai/generate")({
         if (!parsed.success) {
           return jsonError(400, "invalid_body", parsed.error.issues[0]?.message ?? "Invalid body.");
         }
-        const { prompt, system, model, json, module, save } = parsed.data;
+        const { prompt, system, json, module, save } = parsed.data;
 
+        let aiCfg: ReturnType<typeof getAiChatConfig>;
         try {
-          getAiChatConfig();
+          aiCfg = getAiChatConfig();
         } catch {
           return jsonError(500, "ai_not_configured", "AI is not configured (set OPENROUTER_API_KEY or OPENAI_API_KEY).");
         }
 
+        const resolvedModel =
+          parsed.data.model?.trim() || resolveGafcoreModelDefaults(aiCfg.url).fast;
+
         const skipCredits = await isGafcoreAdminUser(auth.userId);
+        let balanceAfter: number | null = null;
         if (!skipCredits) {
           const { data: credit, error: cErr } = await supabaseAdmin.rpc("consume_credits", {
             p_user_id: auth.userId,
@@ -63,6 +68,7 @@ export const Route = createFileRoute("/api/v1/ai/generate")({
           if (!(credit as { ok?: boolean } | null)?.ok) {
             return jsonError(402, "insufficient_credits", "Not enough credits to perform this request.");
           }
+          balanceAfter = (credit as { balance?: number } | null)?.balance ?? null;
         }
 
         const messages = [
@@ -77,7 +83,7 @@ export const Route = createFileRoute("/api/v1/ai/generate")({
         ];
 
         const res = await postChatCompletions({
-          model,
+          model: resolvedModel,
           messages,
           ...(json ? { response_format: { type: "json_object" } } : {}),
         });
@@ -115,7 +121,7 @@ export const Route = createFileRoute("/api/v1/ai/generate")({
             .insert({ user_id: auth.userId, module, prompt, result });
         }
 
-        return jsonOk({ model, result, balance: (credit as any)?.balance ?? null });
+        return jsonOk({ model: resolvedModel, result, balance: balanceAfter });
       },
     },
   },

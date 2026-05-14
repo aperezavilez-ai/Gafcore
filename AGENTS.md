@@ -21,6 +21,7 @@ bun run build          # build de producción
 bun run build:dev      # build dev (sourcemaps)
 bun run lint           # ESLint
 bun run format         # Prettier
+npm run gafcore:doctor # comprueba variables .env (Supabase + IA), sin volcar secretos
 ```
 
 No correr `tsc --noEmit` manualmente — el build ya lo hace.
@@ -89,6 +90,9 @@ supabase/config.toml     config Supabase (no editar project_id)
 3. Verifica tras editar: build output, runtime, console logs.
 4. Para tareas grandes: plan corto primero.
 5. Comunica en español, conciso. Refiérete al backend como "backend" / "GafCore backend".
+6. **Al cerrar una tarea sustantiva:** añadir **«Qué sigue (propuesta)»** (1–3 pasos). Priorizar ejecución con herramientas en el repo; ver límites en `.cursorrules` (cuentas externas, `.env` con secretos).
+
+Persistencia: reglas de workspace en **`.cursorrules`**; este archivo para cualquier agente. Instrucciones globales del usuario: **Cursor → Settings → Rules for AI**.
 
 ## Variables de entorno
 

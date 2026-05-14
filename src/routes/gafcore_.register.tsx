@@ -6,7 +6,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { signInWithOAuth } from "@/lib/supabase-oauth";
 import { useServerFn } from "@tanstack/react-start";
 import { assignGafcoreAccountType } from "@/lib/gafcore-roles.functions";
+import { assertGafcoreSignupAllowed } from "@/lib/gafcore-register.functions";
 import { setPlanChoicePending } from "@/lib/gafcore-plan-choice";
+import { TurnstileWidget, isTurnstileSiteKeyConfigured } from "@/components/TurnstileWidget";
 
 type AccountType = "user" | "demo" | "admin";
 
@@ -31,6 +33,8 @@ function GafCoreRegisterPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileMountKey, setTurnstileMountKey] = useState(0);
   const light = false;
   const { plan, redirect } = Route.useSearch();
   /** Tras crear cuenta o verificar correo: siempre a planes primero; solo si eligieron plan de pago → URL con ?plan= para abrir checkout. */
@@ -42,6 +46,7 @@ function GafCoreRegisterPage() {
     return "/gafcore#planes";
   })();
   const assignRole = useServerFn(assignGafcoreAccountType);
+  const assertSignup = useServerFn(assertGafcoreSignupAllowed);
 
   const accountType: AccountType = "user";
 
@@ -65,10 +70,50 @@ function GafCoreRegisterPage() {
       setError("Escribe tu correo y contraseña.");
       return;
     }
+    if (isTurnstileSiteKeyConfigured() && !turnstileToken?.trim()) {
+      setError("Completa la verificación (Turnstile) antes de crear la cuenta.");
+      return;
+    }
     setError("");
     setLoading(true);
 
     try {
+      try {
+        await assertSignup({
+          data: {
+            email: normalizedEmail,
+            turnstileToken: turnstileToken?.trim() || undefined,
+          },
+        });
+      } catch (preErr) {
+        setLoading(false);
+        const code = preErr instanceof Error ? preErr.message : "";
+        if (code === "EMAIL_ALREADY_REGISTERED") {
+          setError(
+            "Este correo ya tiene una cuenta en GafCore. Inicia sesión o usa «¿Olvidaste tu contraseña?» si no recuerdas la clave.",
+          );
+          return;
+        }
+        if (code === "SIGNUP_IP_RATE_LIMIT") {
+          setError(
+            "Se alcanzó el límite de registros nuevos desde esta red por hoy. Si es un error, inténtalo mañana o desde otra conexión.",
+          );
+          return;
+        }
+        if (code === "TURNSTILE_REQUIRED" || code === "INVALID_TURNSTILE") {
+          setTurnstileToken(null);
+          setTurnstileMountKey((k) => k + 1);
+          setError(
+            code === "TURNSTILE_REQUIRED"
+              ? "Falta la verificación humana. Vuelve a completar el recuadro de Turnstile."
+              : "La verificación humana no fue válida. Inténtalo de nuevo.",
+          );
+          return;
+        }
+        setError(preErr instanceof Error ? preErr.message : "No se pudo iniciar el registro.");
+        return;
+      }
+
       const signUpPromise = supabase.auth.signUp({
         email: normalizedEmail,
         password: currentPassword,
@@ -287,6 +332,12 @@ function GafCoreRegisterPage() {
                   ))}
                 </ul>
               </div>
+
+              {isTurnstileSiteKeyConfigured() ? (
+                <div className="mt-2 flex justify-center">
+                  <TurnstileWidget key={turnstileMountKey} theme="dark" onToken={setTurnstileToken} />
+                </div>
+              ) : null}
 
               <button type="submit" disabled={loading} className="auth-grad-btn mt-2">
                 {loading ? "Creando..." : "Crear cuenta"} <ArrowRight size={16} />

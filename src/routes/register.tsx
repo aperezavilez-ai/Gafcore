@@ -10,6 +10,9 @@ import { claimMasterAccess } from "@/lib/server-fns/admin.functions";
 import { AuthCard } from "@/components/AuthCard";
 import logo from "@/assets/gafsuite-logo.png";
 import { setPlanChoicePending } from "@/lib/gafcore-plan-choice";
+import { useServerFn } from "@tanstack/react-start";
+import { assertGafcoreSignupAllowed } from "@/lib/gafcore-register.functions";
+import { TurnstileWidget, isTurnstileSiteKeyConfigured } from "@/components/TurnstileWidget";
 
 export const Route = createFileRoute("/register")({
   validateSearch: (search: Record<string, unknown>): { plan?: string; redirect?: string } => {
@@ -33,19 +36,65 @@ function RegisterPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileMountKey, setTurnstileMountKey] = useState(0);
   const { t } = useI18n();
   const { plan, redirect } = Route.useSearch();
   const redirectTo =
     redirect ||
     (plan ? `/gafcore?plan=${encodeURIComponent(plan)}` : "/gafcore?pick_plan=1");
 
+  const assertSignup = useServerFn(assertGafcoreSignupAllowed);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
+    const normalizedEmail = email.trim().toLowerCase();
+    if (isTurnstileSiteKeyConfigured() && !turnstileToken?.trim()) {
+      setLoading(false);
+      setError("Completa la verificación (Turnstile) antes de crear la cuenta.");
+      return;
+    }
+    try {
+      await assertSignup({
+        data: {
+          email: normalizedEmail,
+          turnstileToken: turnstileToken?.trim() || undefined,
+        },
+      });
+    } catch (preErr) {
+      setLoading(false);
+      const code = preErr instanceof Error ? preErr.message : "";
+      if (code === "EMAIL_ALREADY_REGISTERED") {
+        setError(
+          "Este correo ya tiene una cuenta en GafCore. Inicia sesión o recupera tu contraseña.",
+        );
+        return;
+      }
+      if (code === "SIGNUP_IP_RATE_LIMIT") {
+        setError(
+          "Se alcanzó el límite de registros nuevos desde esta red por hoy. Inténtalo mañana o desde otra conexión.",
+        );
+        return;
+      }
+      if (code === "TURNSTILE_REQUIRED" || code === "INVALID_TURNSTILE") {
+        setTurnstileToken(null);
+        setTurnstileMountKey((k) => k + 1);
+        setError(
+          code === "TURNSTILE_REQUIRED"
+            ? "Falta la verificación humana. Vuelve a completar el recuadro de Turnstile."
+            : "La verificación humana no fue válida. Inténtalo de nuevo.",
+        );
+        return;
+      }
+      setError(preErr instanceof Error ? preErr.message : "No se pudo iniciar el registro.");
+      return;
+    }
+
     const { error: authError } = await supabase.auth.signUp({
-      email,
+      email: normalizedEmail,
       password,
       options: {
         emailRedirectTo: window.location.origin + redirectTo,
@@ -194,6 +243,11 @@ function RegisterPage() {
                 </button>
               </div>
             </div>
+            {isTurnstileSiteKeyConfigured() ? (
+              <div className="flex justify-center pt-1">
+                <TurnstileWidget key={turnstileMountKey} theme="auto" onToken={setTurnstileToken} />
+              </div>
+            ) : null}
             <Button type="submit" variant="hero" className="h-12 w-full rounded-xl" size="lg" disabled={loading}>
               {loading ? "..." : t("auth.createBtn")} <ArrowRight size={16} />
             </Button>

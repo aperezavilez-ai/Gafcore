@@ -5,8 +5,8 @@ import { getStripeEnvironment } from "@/lib/stripe";
 export interface Subscription {
   id: string;
   user_id: string;
-  paddle_subscription_id: string;
-  paddle_customer_id: string;
+  paddle_subscription_id: string | null;
+  paddle_customer_id: string | null;
   product_id: string;
   price_id: string;
   status: string;
@@ -14,6 +14,8 @@ export interface Subscription {
   current_period_end: string | null;
   cancel_at_period_end: boolean;
   environment: string;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
   /** Columna en BD (Stripe webhook); sirve si `price_id` es un id técnico de Stripe. */
   plan_tier?: string | null;
 }

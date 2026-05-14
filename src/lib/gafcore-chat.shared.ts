@@ -51,6 +51,23 @@ export const COST_PER_REQUEST = 1;
 export const MODEL_FAST = "google/gemini-2.5-flash";
 export const MODEL_DEEP = "openai/gpt-4o";
 
+/** IDs por defecto en `https://api.openai.com/v1/chat/completions` (no slugs `proveedor/modelo`). */
+export const OPENAI_API_DEFAULT_FAST = "gpt-4o-mini";
+export const OPENAI_API_DEFAULT_DEEP = "gpt-4o";
+
+/** Elige defaults de modelo según el host del endpoint (OpenAI directo vs OpenRouter u otro). */
+export function resolveGafcoreModelDefaults(chatCompletionsUrl: string): {
+  fast: string;
+  deep: string;
+} {
+  const u = chatCompletionsUrl.toLowerCase();
+  const useOpenAiNativeIds = u.includes("api.openai.com") && !u.includes("openrouter");
+  return {
+    fast: useOpenAiNativeIds ? OPENAI_API_DEFAULT_FAST : MODEL_FAST,
+    deep: useOpenAiNativeIds ? OPENAI_API_DEFAULT_DEEP : MODEL_DEEP,
+  };
+}
+
 const CONTEXT_CHAR_BUDGET = 42_000;
 const PER_FILE_CONTEXT_CAP = 14_000;
 

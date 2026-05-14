@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as SignupRouteImport } from './routes/signup'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as RefundRouteImport } from './routes/refund'
@@ -19,6 +20,7 @@ import { Route as GafcoreRouteImport } from './routes/gafcore'
 import { Route as CreditsRouteImport } from './routes/credits'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as GafcoreRegisterRouteImport } from './routes/gafcore_.register'
+import { Route as GafcoreProjectsRouteImport } from './routes/gafcore_.projects'
 import { Route as GafcoreLoginRouteImport } from './routes/gafcore_.login'
 import { Route as GafcoreAppRouteImport } from './routes/gafcore_.app'
 import { Route as ApiChatRouteImport } from './routes/api/chat'
@@ -38,6 +40,11 @@ import { Route as ApiGafcoreChatStreamRouteImport } from './routes/api/gafcore/c
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
   path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignupRoute = SignupRouteImport.update({
+  id: '/signup',
+  path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -83,6 +90,11 @@ const IndexRoute = IndexRouteImport.update({
 const GafcoreRegisterRoute = GafcoreRegisterRouteImport.update({
   id: '/gafcore_/register',
   path: '/gafcore/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GafcoreProjectsRoute = GafcoreProjectsRouteImport.update({
+  id: '/gafcore_/projects',
+  path: '/gafcore/projects',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GafcoreLoginRoute = GafcoreLoginRouteImport.update({
@@ -171,10 +183,12 @@ export interface FileRoutesByFullPath {
   '/refund': typeof RefundRoute
   '/register': typeof RegisterRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
   '/api/chat': typeof ApiChatRoute
   '/gafcore/app': typeof GafcoreAppRoute
   '/gafcore/login': typeof GafcoreLoginRoute
+  '/gafcore/projects': typeof GafcoreProjectsRoute
   '/gafcore/register': typeof GafcoreRegisterRoute
   '/api/v1/credits': typeof ApiV1CreditsRoute
   '/api/v1/generations': typeof ApiV1GenerationsRoute
@@ -198,10 +212,12 @@ export interface FileRoutesByTo {
   '/refund': typeof RefundRoute
   '/register': typeof RegisterRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
   '/api/chat': typeof ApiChatRoute
   '/gafcore/app': typeof GafcoreAppRoute
   '/gafcore/login': typeof GafcoreLoginRoute
+  '/gafcore/projects': typeof GafcoreProjectsRoute
   '/gafcore/register': typeof GafcoreRegisterRoute
   '/api/v1/credits': typeof ApiV1CreditsRoute
   '/api/v1/generations': typeof ApiV1GenerationsRoute
@@ -226,10 +242,12 @@ export interface FileRoutesById {
   '/refund': typeof RefundRoute
   '/register': typeof RegisterRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/signup': typeof SignupRoute
   '/terms': typeof TermsRoute
   '/api/chat': typeof ApiChatRoute
   '/gafcore_/app': typeof GafcoreAppRoute
   '/gafcore_/login': typeof GafcoreLoginRoute
+  '/gafcore_/projects': typeof GafcoreProjectsRoute
   '/gafcore_/register': typeof GafcoreRegisterRoute
   '/api/v1/credits': typeof ApiV1CreditsRoute
   '/api/v1/generations': typeof ApiV1GenerationsRoute
@@ -255,10 +273,12 @@ export interface FileRouteTypes {
     | '/refund'
     | '/register'
     | '/reset-password'
+    | '/signup'
     | '/terms'
     | '/api/chat'
     | '/gafcore/app'
     | '/gafcore/login'
+    | '/gafcore/projects'
     | '/gafcore/register'
     | '/api/v1/credits'
     | '/api/v1/generations'
@@ -282,10 +302,12 @@ export interface FileRouteTypes {
     | '/refund'
     | '/register'
     | '/reset-password'
+    | '/signup'
     | '/terms'
     | '/api/chat'
     | '/gafcore/app'
     | '/gafcore/login'
+    | '/gafcore/projects'
     | '/gafcore/register'
     | '/api/v1/credits'
     | '/api/v1/generations'
@@ -309,10 +331,12 @@ export interface FileRouteTypes {
     | '/refund'
     | '/register'
     | '/reset-password'
+    | '/signup'
     | '/terms'
     | '/api/chat'
     | '/gafcore_/app'
     | '/gafcore_/login'
+    | '/gafcore_/projects'
     | '/gafcore_/register'
     | '/api/v1/credits'
     | '/api/v1/generations'
@@ -337,10 +361,12 @@ export interface RootRouteChildren {
   RefundRoute: typeof RefundRoute
   RegisterRoute: typeof RegisterRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
+  SignupRoute: typeof SignupRoute
   TermsRoute: typeof TermsRoute
   ApiChatRoute: typeof ApiChatRoute
   GafcoreAppRoute: typeof GafcoreAppRoute
   GafcoreLoginRoute: typeof GafcoreLoginRoute
+  GafcoreProjectsRoute: typeof GafcoreProjectsRoute
   GafcoreRegisterRoute: typeof GafcoreRegisterRoute
   ApiV1CreditsRoute: typeof ApiV1CreditsRoute
   ApiV1GenerationsRoute: typeof ApiV1GenerationsRoute
@@ -362,6 +388,13 @@ declare module '@tanstack/react-router' {
       path: '/terms'
       fullPath: '/terms'
       preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/signup': {
+      id: '/signup'
+      path: '/signup'
+      fullPath: '/signup'
+      preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/reset-password': {
@@ -425,6 +458,13 @@ declare module '@tanstack/react-router' {
       path: '/gafcore/register'
       fullPath: '/gafcore/register'
       preLoaderRoute: typeof GafcoreRegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gafcore_/projects': {
+      id: '/gafcore_/projects'
+      path: '/gafcore/projects'
+      fullPath: '/gafcore/projects'
+      preLoaderRoute: typeof GafcoreProjectsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/gafcore_/login': {
@@ -556,10 +596,12 @@ const rootRouteChildren: RootRouteChildren = {
   RefundRoute: RefundRoute,
   RegisterRoute: RegisterRoute,
   ResetPasswordRoute: ResetPasswordRoute,
+  SignupRoute: SignupRoute,
   TermsRoute: TermsRoute,
   ApiChatRoute: ApiChatRoute,
   GafcoreAppRoute: GafcoreAppRoute,
   GafcoreLoginRoute: GafcoreLoginRoute,
+  GafcoreProjectsRoute: GafcoreProjectsRoute,
   GafcoreRegisterRoute: GafcoreRegisterRoute,
   ApiV1CreditsRoute: ApiV1CreditsRoute,
   ApiV1GenerationsRoute: ApiV1GenerationsRoute,

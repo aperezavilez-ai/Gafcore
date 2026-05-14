@@ -43,6 +43,16 @@ export function useCredits(userId: string | undefined) {
     };
   }, [userId, refresh]);
 
+  /** Otras partes del IDE (p. ej. sync de bienvenida en ChatPanel) disparan esto para unificar saldos. */
+  useEffect(() => {
+    if (!userId) return;
+    const onRefresh = () => {
+      void refresh();
+    };
+    window.addEventListener("gafcore:credits-refresh", onRefresh);
+    return () => window.removeEventListener("gafcore:credits-refresh", onRefresh);
+  }, [userId, refresh]);
+
   /** Returns true on success, false on insufficient credits, throws on real errors. */
   const consume = useCallback(
     async (amount: number, reason: string, metadata: Record<string, unknown> = {}) => {

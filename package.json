@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "purge-users": "node scripts/delete-users-except-admin.mjs"
+    "purge-users": "node scripts/delete-users-except-admin.mjs",
+    "gafcore:doctor": "node scripts/check-gafcore-setup.mjs"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.25.5",

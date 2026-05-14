@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ClipboardEvent,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   ArrowUp,
   Sparkles,
@@ -6,6 +14,7 @@ import {
   Plus,
   Pencil,
   Mic,
+  X,
   Settings as SettingsIcon,
   History,
   Info,
@@ -15,6 +24,7 @@ import {
   Folder,
   ChevronRight,
   ChevronDown,
+  Paperclip,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -29,15 +39,20 @@ import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import type { ChatMsg } from "@/lib/openaiChat";
 import { gafcoreChat } from "@/lib/gafcore-chat.functions";
+import { assignGafcoreAccountType } from "@/lib/gafcore-roles.functions";
 import { validateGafcoreSources } from "@/lib/gafcore-validate.functions";
 import type { FileItem } from "@/components/ide/CodeEditor";
 import { CreditsOutModal } from "@/components/CreditsOutModal";
 import { supabase } from "@/integrations/supabase/client";
 import { useCredits } from "@/hooks/useCredits";
 import { useSubscription } from "@/hooks/useSubscription";
+import { sanitizeUserFacingAiText } from "@/lib/gafcore-user-facing-errors";
+import { displayMonthlyAllowanceForUi } from "@/lib/gafcore-plan-credits.shared";
 import { Coins } from "lucide-react";
 
 type Msg = { role: "user" | "ai"; content: string; ts?: number };
+
+type PendingComposerImage = { id: string; previewUrl: string; fileName: string };
 
 async function readSseJsonPayload(
   res: Response,
@@ -94,6 +109,67 @@ const FOLLOWUPS = [
   "Mejorar el diseño",
 ];
 
+const CHAT_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+/** Data URL en `project_files`; debe caber en el presupuesto de contexto del modelo (truncado por archivo ~14k). */
+const CHAT_IMAGE_DATA_URL_MAX_CHARS = 11_000;
+
+function isProbablyImageFile(f: File): boolean {
+  if (f.type.startsWith("image/")) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i.test(f.name);
+}
+
+function dataUrlFromImageFileViaCanvas(
+  file: File,
+  maxEdge: number,
+  quality: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      try {
+        let { width, height } = img;
+        const scale = Math.min(1, maxEdge / Math.max(width, height, 1));
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          URL.revokeObjectURL(url);
+          reject(new Error("no_canvas"));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        URL.revokeObjectURL(url);
+        resolve(dataUrl);
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        reject(e);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("load_image"));
+    };
+    img.src = url;
+  });
+}
+
+async function compressChatImageFile(file: File): Promise<string> {
+  let q = 0.82;
+  let edge = 1280;
+  for (let attempt = 0; attempt < 7; attempt++) {
+    const dataUrl = await dataUrlFromImageFileViaCanvas(file, edge, q);
+    if (dataUrl.length <= CHAT_IMAGE_DATA_URL_MAX_CHARS) return dataUrl;
+    q = Math.max(0.38, q - 0.1);
+    edge = Math.round(edge * 0.78);
+  }
+  return dataUrlFromImageFileViaCanvas(file, 512, 0.38);
+}
+
 export function ChatPanel({
   files,
   setFiles,
@@ -104,7 +180,7 @@ export function ChatPanel({
   projectId,
 }: {
   files: FileItem[];
-  setFiles: (f: FileItem[]) => void;
+  setFiles: Dispatch<SetStateAction<FileItem[]>>;
   onCodeGenerated?: () => void;
   onOpenSettings?: () => void;
   onOpenHistory?: () => void;
@@ -113,6 +189,7 @@ export function ChatPanel({
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
+  const [pendingComposerImages, setPendingComposerImages] = useState<PendingComposerImage[]>([]);
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"build" | "chat">("build");
   const [visualEditOn, setVisualEditOn] = useState(false);
@@ -129,6 +206,8 @@ export function ChatPanel({
   /** Invalida respuestas tardías si el usuario envía otra cosa o pulsa detener. */
   const requestEpochRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const freeCreditsRescueDone = useRef(false);
+  const freeCreditsRescueUserId = useRef<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -156,8 +235,14 @@ export function ChatPanel({
         })),
       );
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [projectId, user?.id]);
+
+  useEffect(() => {
+    setPendingComposerImages([]);
+  }, [projectId]);
 
   // Realtime: sync new chat messages across tabs/devices for this project
   useEffect(() => {
@@ -166,7 +251,12 @@ export function ChatPanel({
       .channel(`chat_messages:${projectId}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "chat_messages", filter: `project_id=eq.${projectId}` },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "chat_messages",
+          filter: `project_id=eq.${projectId}`,
+        },
         (payload: any) => {
           const r = payload.new;
           if (!r || r.user_id !== user.id) return;
@@ -174,10 +264,18 @@ export function ChatPanel({
           setMessages((prev) => {
             // dedupe: skip if last message has same content+role within 2s
             const last = prev[prev.length - 1];
-            if (last && last.content === r.content && ((last.role === "ai") === (r.role === "assistant")) && Math.abs((last.ts ?? 0) - ts) < 2000) {
+            if (
+              last &&
+              last.content === r.content &&
+              (last.role === "ai") === (r.role === "assistant") &&
+              Math.abs((last.ts ?? 0) - ts) < 2000
+            ) {
               return prev;
             }
-            return [...prev, { role: r.role === "assistant" ? "ai" : "user", content: r.content, ts }];
+            return [
+              ...prev,
+              { role: r.role === "assistant" ? "ai" : "user", content: r.content, ts },
+            ];
           });
         },
       )
@@ -205,10 +303,10 @@ export function ChatPanel({
   // Sync generated files to project_files (best-effort)
   const syncFilesToDb = async (
     generated: Array<{ name: string; language?: string; content: string }>,
-  ) => {
-    if (!projectId || !user?.id || generated.length === 0) return;
+  ): Promise<boolean> => {
+    if (!projectId || !user?.id || generated.length === 0) return false;
     try {
-      await supabase.from("project_files").upsert(
+      const { error } = await supabase.from("project_files").upsert(
         generated.map((f) => ({
           project_id: projectId,
           name: f.name,
@@ -218,14 +316,66 @@ export function ChatPanel({
         })),
         { onConflict: "project_id,name" },
       );
-    } catch {
-      /* silent */
+      if (error) {
+        console.error("[ChatPanel] syncFilesToDb:", error);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error("[ChatPanel] syncFilesToDb:", e);
+      return false;
     }
   };
 
+  const {
+    balance,
+    monthlyAllowance,
+    isUnlimitedDaily,
+    loading: creditsLoading,
+    refresh: refreshCredits,
+  } = useCredits(user?.id);
+  const {
+    isAdmin,
+    planDisplayLabel,
+    subActive,
+    subscription,
+    loading: subLoading,
+  } = useSubscription(user?.id);
+  const displayMonthly = displayMonthlyAllowanceForUi({ isAdmin, subActive, monthlyAllowance });
+  const isFairUseCreadorPlan =
+    !isAdmin &&
+    subActive &&
+    (subscription?.price_id === "plan_creador_monthly" ||
+      String(subscription?.plan_tier ?? "").toLowerCase() === "creador");
 
-  const { balance, isUnlimitedDaily, loading: creditsLoading, refresh: refreshCredits } = useCredits(user?.id);
-  const { isAdmin } = useSubscription(user?.id);
+  const assignUserWelcome = useServerFn(assignGafcoreAccountType);
+
+  useEffect(() => {
+    if (user?.id !== freeCreditsRescueUserId.current) {
+      freeCreditsRescueUserId.current = user?.id ?? null;
+      freeCreditsRescueDone.current = false;
+    }
+  }, [user?.id]);
+
+  /** Si el saldo sigue en 0 (p. ej. sync de bienvenida no corrió al cargar /app), repara al montar el chat. */
+  useEffect(() => {
+    if (!user?.id || isAdmin || subLoading || creditsLoading) return;
+    if (balance > 0) {
+      freeCreditsRescueDone.current = true;
+      return;
+    }
+    if (freeCreditsRescueDone.current) return;
+    freeCreditsRescueDone.current = true;
+    void (async () => {
+      try {
+        await assignUserWelcome({ data: { accountType: "user" } });
+        await refreshCredits();
+        window.dispatchEvent(new Event("gafcore:credits-refresh"));
+      } catch {
+        freeCreditsRescueDone.current = false;
+      }
+    })();
+  }, [user?.id, isAdmin, subLoading, creditsLoading, balance, assignUserWelcome, refreshCredits]);
 
   useEffect(() => {
     const onCreditsApplied = () => {
@@ -278,36 +428,191 @@ export function ChatPanel({
     }
   };
 
-  const handleAttachFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const applyChatImageFromBlob = async (file: File, sourceLabel: string) => {
+    if (!isProbablyImageFile(file)) {
+      toast.error("El archivo no es una imagen.");
+      return;
+    }
+    if (file.size > CHAT_IMAGE_MAX_BYTES) {
+      toast.error("La imagen supera 8 MB. Reduce el tamaño o comprímela.");
+      return;
+    }
+    try {
+      const dataUrl = await compressChatImageFile(file);
+      if (dataUrl.length > CHAT_IMAGE_DATA_URL_MAX_CHARS + 500) {
+        toast.error(
+          "La imagen sigue siendo demasiado grande tras comprimir. Prueba otra más pequeña.",
+        );
+        return;
+      }
+      const relName = `assets/gafcore-ref-${Date.now()}.jpg`;
+      const item: FileItem = {
+        name: relName,
+        language: "plaintext",
+        content: dataUrl,
+      };
+      setFiles((prev) => [...prev.filter((f) => f.name !== relName), item]);
+      const thumbId = `thumb-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      setPendingComposerImages((prev) => [
+        ...prev,
+        { id: thumbId, previewUrl: dataUrl, fileName: relName },
+      ]);
+      toast.success(`${sourceLabel}: ${file.name || relName}`);
+      if (!projectId || !user?.id) {
+        toast.message("Imagen en el editor", {
+          description:
+            "Cuando el proyecto esté listo en la nube, se guardará con el resto de archivos.",
+        });
+        return;
+      }
+      const ok = await syncFilesToDb([item]);
+      if (!ok) {
+        toast.error("No se pudo guardar la imagen en la nube; sigue en el editor local.");
+      }
+    } catch {
+      toast.error("No se pudo procesar la imagen.");
+    }
+  };
+
+  const removePendingComposerImage = (id: string) => {
+    setPendingComposerImages((prev) => {
+      const row = prev.find((p) => p.id === id);
+      const next = prev.filter((p) => p.id !== id);
+      if (row) {
+        setFiles((prevFiles) => prevFiles.filter((f) => f.name !== row.fileName));
+      }
+      return next;
+    });
+  };
+
+  const handleAttachFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (isProbablyImageFile(file)) {
+      void applyChatImageFromBlob(file, "Imagen adjunta");
+      e.target.value = "";
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       const content = String(reader.result ?? "");
       const ext = file.name.split(".").pop()?.toLowerCase() ?? "txt";
       const lang =
-        ext === "tsx" || ext === "ts" ? "typescript" :
-        ext === "jsx" || ext === "js" ? "javascript" :
-        ext === "css" ? "css" : ext === "html" ? "html" :
-        ext === "json" ? "json" : ext === "md" ? "markdown" : "plaintext";
-      setFiles([...files, { name: file.name, language: lang, content }]);
-      toast.success(`Archivo "${file.name}" añadido al proyecto`);
+        ext === "tsx" || ext === "ts"
+          ? "typescript"
+          : ext === "jsx" || ext === "js"
+            ? "javascript"
+            : ext === "css"
+              ? "css"
+              : ext === "html"
+                ? "html"
+                : ext === "json"
+                  ? "json"
+                  : ext === "md"
+                    ? "markdown"
+                    : "plaintext";
+      const item: FileItem = { name: file.name, language: lang, content };
+      setFiles((prev) => [...prev.filter((f) => f.name !== file.name), item]);
+      void (async () => {
+        if (!projectId || !user?.id) {
+          toast.message(`“${file.name}” en el editor`, {
+            description:
+              "Cuando el proyecto esté listo en la nube, se guardará con el resto de archivos.",
+          });
+          return;
+        }
+        const ok = await syncFilesToDb([item]);
+        if (ok) {
+          toast.success(`Archivo “${file.name}” añadido y guardado en el proyecto`);
+        } else {
+          toast.error(
+            "No se pudo guardar el archivo en la nube. Sigue en el editor; reintenta o revisa permisos.",
+          );
+        }
+      })();
     };
     reader.onerror = () => toast.error("No se pudo leer el archivo");
     reader.readAsText(file);
     e.target.value = "";
   };
 
-  const handleAttachImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** Portapapeles con imagen (archivo, data URL o HTML con img). Devuelve true si consumió el evento. */
+  const handleComposerPaste = (ev: ClipboardEvent<HTMLTextAreaElement>) => {
+    const dt = ev.clipboardData;
+    if (!dt) return false;
+    const fileList = dt.files;
+    if (fileList?.length) {
+      for (let i = 0; i < fileList.length; i++) {
+        const f = fileList.item(i);
+        if (f && isProbablyImageFile(f)) {
+          ev.preventDefault();
+          void applyChatImageFromBlob(f, "Imagen pegada");
+          return true;
+        }
+      }
+    }
+    const items = dt.items;
+    if (items?.length) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.kind !== "file") continue;
+        const f = it.getAsFile();
+        if (f && isProbablyImageFile(f)) {
+          ev.preventDefault();
+          void applyChatImageFromBlob(f, "Imagen pegada");
+          return true;
+        }
+      }
+    }
+    const plain = dt.getData("text/plain").trim();
+    if (plain.startsWith("data:image/")) {
+      ev.preventDefault();
+      void (async () => {
+        try {
+          const res = await fetch(plain);
+          const blob = await res.blob();
+          const ext = blob.type.includes("png")
+            ? "png"
+            : blob.type.includes("webp")
+              ? "webp"
+              : "jpg";
+          await applyChatImageFromBlob(
+            new File([blob], `pegado.${ext}`, { type: blob.type || "image/png" }),
+            "Imagen pegada",
+          );
+        } catch {
+          toast.error("No se pudo leer la imagen del portapapeles.");
+        }
+      })();
+      return true;
+    }
+    const html = dt.getData("text/html");
+    if (html?.length) {
+      const m = html.match(/\bsrc=["'](data:image\/[^"'>\s]+)/i);
+      if (m?.[1]) {
+        ev.preventDefault();
+        void (async () => {
+          try {
+            const res = await fetch(m[1]);
+            const blob = await res.blob();
+            await applyChatImageFromBlob(
+              new File([blob], "pegado.jpg", { type: blob.type || "image/jpeg" }),
+              "Imagen pegada",
+            );
+          } catch {
+            toast.error("No se pudo extraer la imagen pegada.");
+          }
+        })();
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const handleAttachImage = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result ?? "");
-      setInput((v) => `${v}${v ? "\n" : ""}![imagen adjunta](${dataUrl.slice(0, 80)}…)`);
-      toast.success(`Imagen "${file.name}" lista para referenciar`);
-    };
-    reader.readAsDataURL(file);
+    void applyChatImageFromBlob(file, "Imagen adjunta");
     e.target.value = "";
   };
 
@@ -338,7 +643,6 @@ export function ChatPanel({
     }
   };
 
-
   // autosize textarea
   useEffect(() => {
     const ta = taRef.current;
@@ -355,7 +659,9 @@ export function ChatPanel({
   useEffect(() => {
     const iframes = document.querySelectorAll("iframe");
     iframes.forEach((f) => {
-      try { f.contentWindow?.postMessage({ type: "ve-toggle", on: visualEditOn }, "*"); } catch {}
+      try {
+        f.contentWindow?.postMessage({ type: "ve-toggle", on: visualEditOn }, "*");
+      } catch {}
     });
   }, [visualEditOn]);
 
@@ -398,9 +704,27 @@ export function ChatPanel({
 
   const send = async (text?: string) => {
     const raw = (text ?? input).trim();
-    if (!raw) return;
-    if (!isAdmin && !isUnlimitedDaily && !creditsLoading && user?.id && balance <= 0) {
-      toast.error("No tienes créditos. Compra un paquete para seguir usando la IA.");
+    const pendingSnapshot = [...pendingComposerImages];
+    const pendingRef =
+      pendingSnapshot.length > 0
+        ? `\n[Referencia visual en archivos del proyecto: ${pendingSnapshot.map((p) => p.fileName).join(", ")}.]`
+        : "";
+    const coreText =
+      raw ||
+      (pendingSnapshot.length > 0
+        ? "Usa la imagen de referencia adjunta en los archivos del proyecto."
+        : "");
+    if (!coreText && pendingSnapshot.length === 0) return;
+    /** El servidor vuelve 402 si no hay saldo; no bloquear aquí con saldo 0 si el cupo mensual aún no se reflejó en `balance` (evita “la IA no hace nada” sin mensaje útil). */
+    const noQuota =
+      !isAdmin &&
+      !isUnlimitedDaily &&
+      !creditsLoading &&
+      !!user?.id &&
+      balance <= 0 &&
+      displayMonthly <= 0;
+    if (noQuota) {
+      toast.error("No tienes créditos de IA. Recarga o elige un plan.", { duration: 6000 });
       setCreditsOut(true);
       return;
     }
@@ -409,11 +733,18 @@ export function ChatPanel({
       : mode === "chat"
         ? "[Modo chat] Responde sin generar código a menos que se solicite explícitamente. "
         : "";
-    const instruction = prefix + raw;
-    if (!instruction || loading) return;
+    const instruction = prefix + coreText + pendingRef;
+    if (!instruction.trim() || loading) return;
     const myEpoch = ++requestEpochRef.current;
     setInput("");
-    setMessages((m) => [...m, { role: "user", content: instruction, ts: Date.now() }]);
+    setPendingComposerImages([]);
+    const userDisplay = [raw, pendingSnapshot.length > 0 ? `📎 ${pendingSnapshot.length} imagen` : ""]
+      .filter(Boolean)
+      .join("\n");
+    setMessages((m) => [
+      ...m,
+      { role: "user", content: userDisplay || "📎 Imagen de referencia", ts: Date.now() },
+    ]);
     void persistMessage("user", instruction);
     setLoading(true);
     setStreamChars(null);
@@ -453,9 +784,14 @@ export function ChatPanel({
         if (!res.ok) {
           let errCode = `HTTP ${res.status}`;
           try {
-            const ej = (await res.json()) as { error?: string };
+            const ej = (await res.json()) as { error?: string; detail?: string };
             if (ej?.error === "insufficient_credits") errCode = "INSUFFICIENT_CREDITS";
+            else if (ej?.error === "ai_not_configured") errCode = "AI_NO_CONFIGURADA";
+            else if (ej?.error === "invalid_body")
+              errCode = "Petición inválida (revisa el texto o archivos).";
             else if (typeof ej?.error === "string") errCode = ej.error;
+            else if (res.status === 500 && ej?.detail)
+              errCode = `Error del servidor: ${String(ej.detail).slice(0, 200)}`;
           } catch {
             /* */
           }
@@ -505,7 +841,7 @@ export function ChatPanel({
 
       if (myEpoch !== requestEpochRef.current) return;
 
-      const replyText = result.reply || "Listo.";
+      const replyText = sanitizeUserFacingAiText(result.reply || "Listo.");
       setStreamChars(null);
       setMessages((m) => [...m, { role: "ai", content: replyText, ts: Date.now() }]);
       void persistMessage("assistant", replyText);
@@ -532,13 +868,20 @@ export function ChatPanel({
         }
       }
     } catch (error: any) {
-      if (error?.name === "AbortError" || (error instanceof DOMException && error.name === "AbortError")) {
+      if (
+        error?.name === "AbortError" ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
         setStreamChars(null);
         return;
       }
       if (myEpoch !== requestEpochRef.current) return;
       const msg = String(error?.message || "");
-      if (msg.includes("INSUFFICIENT_CREDITS") || msg.includes("insufficient_credits") || /sin créditos|créditos.*agotad/i.test(msg)) {
+      if (
+        msg.includes("INSUFFICIENT_CREDITS") ||
+        msg.includes("insufficient_credits") ||
+        /sin créditos|créditos.*agotad/i.test(msg)
+      ) {
         setCreditsOut(true);
         setMessages((m) => [
           ...m,
@@ -550,9 +893,22 @@ export function ChatPanel({
           },
         ]);
       } else {
+        const errMsg = String(error?.message ?? "");
+        const aiCfg =
+          errMsg === "AI_NO_CONFIGURADA" ||
+          errMsg.includes("ai_not_configured") ||
+          /AI.*no.*configurad/i.test(errMsg);
+        const friendly = aiCfg
+          ? "El asistente de IA no encuentra clave en el servidor. En local: crea o edita **.env.local** (o `.env`) en la **raíz del proyecto** con `OPENROUTER_API_KEY`, `OPENAI_API_KEY` o la pareja `AI_CHAT_COMPLETIONS_URL` + `AI_API_KEY`, guarda y **reinicia** el servidor de desarrollo (`bun run dev` / `npm run dev`). En producción, define las mismas variables en el panel del host (p. ej. Vercel)."
+          : (error?.message ?? "No pude responder en este momento. Inténtalo de nuevo.");
+        if (aiCfg) toast.error("IA no configurada", { duration: 12_000 });
         setMessages((m) => [
           ...m,
-          { role: "ai", content: error?.message ?? "No pude responder en este momento. Inténtalo de nuevo.", ts: Date.now() },
+          {
+            role: "ai",
+            content: sanitizeUserFacingAiText(friendly),
+            ts: Date.now(),
+          },
         ]);
       }
     } finally {
@@ -563,40 +919,62 @@ export function ChatPanel({
       }
       refreshCredits();
     }
-
   };
 
   const empty = messages.length === 0;
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {/* Credits badge */}
-      <div className="flex items-center justify-end gap-2 border-b border-border/60 px-3 py-1.5">
-        <button
-          type="button"
-          onClick={() => user?.id && setCreditsOut(true)}
-          className="group inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-foreground/80 transition hover:border-primary/50 hover:bg-primary/10 hover:text-foreground"
-          title="Créditos de IA disponibles. Click para recargar."
-        >
-          <Coins className="h-3 w-3 text-amber-400" />
-          {creditsLoading ? (
-            <span className="text-muted-foreground">…</span>
-          ) : isAdmin ? (
-            <span className="inline-flex items-center gap-1">
-              <span className="font-semibold text-foreground">Administrador</span>
-              <span className="text-muted-foreground">·</span>
+      {/* Plan + créditos (chat) + recarga */}
+      <div className="border-b border-border/60 px-3 py-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span
+            className="min-w-0 flex-1 truncate text-[10px] font-semibold text-foreground md:text-[11px]"
+            title={planDisplayLabel}
+          >
+            {planDisplayLabel}
+          </span>
+          <button
+            type="button"
+            onClick={() => user?.id && setCreditsOut(true)}
+            className="group inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 px-2.5 py-1 text-[11px] font-medium text-foreground/80 transition hover:border-primary/50 hover:bg-primary/10 hover:text-foreground"
+            title="Créditos de IA disponibles. Click para recargar."
+          >
+            <Coins className="h-3 w-3 text-amber-400" />
+            {creditsLoading || subLoading ? (
+              <span className="text-muted-foreground">…</span>
+            ) : isAdmin ? (
+              <span className="inline-flex items-center gap-1">
+                <span className="font-semibold text-foreground">Administrador</span>
+                <span className="text-muted-foreground">·</span>
+                <span>Ilimitado</span>
+              </span>
+            ) : isFairUseCreadorPlan || isUnlimitedDaily ? (
               <span>Ilimitado</span>
+            ) : (
+              <>
+                <span className="tabular-nums">{balance.toLocaleString()}</span>
+                <span className="text-muted-foreground">/</span>
+                <span className="tabular-nums">{displayMonthly.toLocaleString()}</span>
+                <span className="text-muted-foreground">créditos</span>
+              </>
+            )}
+            <span className="ml-1 hidden text-[10px] text-primary/80 group-hover:inline">
+              + Recargar
             </span>
-          ) : isUnlimitedDaily ? (
-            <span>Ilimitado</span>
-          ) : (
-            <>
-              <span className="tabular-nums">{balance.toLocaleString()}</span>
-              <span className="text-muted-foreground">créditos</span>
-            </>
-          )}
-          <span className="ml-1 hidden text-[10px] text-primary/80 group-hover:inline">+ Recargar</span>
-        </button>
+          </button>
+        </div>
+        {!isAdmin ? (
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            className="mt-2 h-8 w-full text-[12px] font-medium"
+            onClick={() => setCreditsOut(true)}
+          >
+            Agregar créditos
+          </Button>
+        ) : null}
       </div>
       {/* Conversation */}
       <ScrollArea className="flex-1">
@@ -634,7 +1012,10 @@ export function ChatPanel({
                     </div>
                   </div>
                 ) : (
-                  <div key={i} className="flex-1 text-[13px] leading-relaxed text-foreground whitespace-pre-wrap break-words">
+                  <div
+                    key={i}
+                    className="flex-1 text-[13px] leading-relaxed text-foreground whitespace-pre-wrap break-words"
+                  >
                     {m.content}
                   </div>
                 ),
@@ -693,12 +1074,40 @@ export function ChatPanel({
             </div>
           </div>
         )}
+        {pendingComposerImages.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 px-2 py-2">
+            {pendingComposerImages.map((img) => (
+              <div
+                key={img.id}
+                className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-background shadow-sm"
+              >
+                <img
+                  src={img.previewUrl}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  draggable={false}
+                />
+                <button
+                  type="button"
+                  title="Quitar imagen"
+                  aria-label="Quitar imagen adjunta"
+                  className="absolute right-0.5 top-0.5 flex h-6 w-6 items-center justify-center rounded-full bg-background/95 text-foreground shadow-sm ring-1 ring-border hover:bg-destructive hover:text-destructive-foreground"
+                  onClick={() => removePendingComposerImage(img.id)}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="rounded-2xl border border-border bg-background shadow-sm transition focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/15">
-
           <textarea
             ref={taRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={(e) => {
+              handleComposerPaste(e);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
@@ -714,7 +1123,7 @@ export function ChatPanel({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html"
+                accept="image/*,.txt,.md,.json,.js,.jsx,.mjs,.cjs,.ts,.tsx,.css,.html,.svg,.xml,.sql,.yaml,.yml,.env,.vue,.svelte,.png,.jpg,.jpeg,.webp,.gif,.bmp,.ico"
                 className="hidden"
                 onChange={handleAttachFile}
               />
@@ -725,6 +1134,24 @@ export function ChatPanel({
                 className="hidden"
                 onChange={handleAttachImage}
               />
+              <button
+                type="button"
+                title="Adjuntar archivo al proyecto"
+                aria-label="Adjuntar archivo al proyecto"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Paperclip className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                title="Adjuntar imagen (foto)"
+                aria-label="Adjuntar imagen"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
+                onClick={() => imageInputRef.current?.click()}
+              >
+                <ImageIcon className="h-3.5 w-3.5" />
+              </button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -735,38 +1162,54 @@ export function ChatPanel({
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" side="top" className="w-60">
-                  <DropdownMenuItem onClick={() => onOpenSettings?.()}>
+                  <DropdownMenuItem onSelect={() => onOpenSettings?.()}>
                     <SettingsIcon className="mr-2 h-4 w-4" />
                     <span className="flex-1">Ajustes</span>
                     <span className="text-xs text-muted-foreground">Ctrl</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => onOpenHistory?.()}>
+                  <DropdownMenuItem onSelect={() => onOpenHistory?.()}>
                     <History className="mr-2 h-4 w-4" />
                     <span className="flex-1">Historia</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => window.open("/gafcore", "_blank", "noopener,noreferrer")}>
+                  <DropdownMenuItem
+                    onSelect={() => window.open("/gafcore", "_blank", "noopener,noreferrer")}
+                  >
                     <Info className="mr-2 h-4 w-4" />
                     <span className="flex-1">Centro GafCore</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => window.open("https://github.com/login", "_blank", "noopener,noreferrer")}>
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      window.open("https://github.com/login", "_blank", "noopener,noreferrer")
+                    }
+                  >
                     <GitFork className="mr-2 h-4 w-4" />
                     <span className="flex-1">GitHub</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => onOpenConnectors?.()}>
+                  <DropdownMenuItem onSelect={() => onOpenConnectors?.()}>
                     <Plug className="mr-2 h-4 w-4" />
                     <span className="flex-1">Conectores</span>
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleScreenshot}>
+                  <DropdownMenuItem onSelect={() => void handleScreenshot()}>
                     <ImageIcon className="mr-2 h-4 w-4" />
                     <span className="flex-1">Toma una captura de pantalla</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => imageInputRef.current?.click()}>
+                  <DropdownMenuItem
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      imageInputRef.current?.click();
+                    }}
+                  >
                     <Plus className="mr-2 h-4 w-4" />
                     <span className="flex-1">Agregar referencia</span>
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+                  <DropdownMenuItem
+                    onSelect={(e) => {
+                      e.preventDefault();
+                      fileInputRef.current?.click();
+                    }}
+                  >
                     <Folder className="mr-2 h-4 w-4" />
                     <span className="flex-1">Adjuntar</span>
                   </DropdownMenuItem>
@@ -818,11 +1261,21 @@ export function ChatPanel({
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" side="top" className="w-44">
-                  <DropdownMenuItem onClick={() => { setMode("build"); toast.success("Modo Construir"); }}>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setMode("build");
+                      toast.success("Modo Construir");
+                    }}
+                  >
                     <span className="flex-1">Construir</span>
                     {mode === "build" && <span className="text-primary">✓</span>}
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => { setMode("chat"); toast.success("Modo Chatear"); }}>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      setMode("chat");
+                      toast.success("Modo Chatear");
+                    }}
+                  >
                     <span className="flex-1">Chatear</span>
                     {mode === "chat" && <span className="text-primary">✓</span>}
                   </DropdownMenuItem>

@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
 import { getAiChatConfig, postChatCompletions } from "@/lib/ai-chat-completions.server";
-import { MODEL_FAST } from "@/lib/gafcore-chat.shared";
+import { resolveGafcoreModelDefaults } from "@/lib/gafcore-chat.shared";
 
 const SYSTEM_PROMPT = `Eres "Gafia", la asistente virtual de soporte de **GafCore**, la plataforma de creación con IA (chat, preview en vivo y editor de código).
 
@@ -35,8 +35,9 @@ export const supportChat = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input) => messageSchema.parse(input))
   .handler(async ({ data }) => {
-    getAiChatConfig();
-    const model = process.env.AI_SUPPORT_MODEL?.trim() || MODEL_FAST;
+    const aiCfg = getAiChatConfig();
+    const { fast } = resolveGafcoreModelDefaults(aiCfg.url);
+    const model = process.env.AI_SUPPORT_MODEL?.trim() || fast;
 
     const res = await postChatCompletions({
       model,

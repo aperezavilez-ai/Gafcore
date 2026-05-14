@@ -8,7 +8,18 @@ import tsconfigPaths from "vite-tsconfig-paths";
 // Producción en Vercel: Nitro + TanStack Start (sin @cloudflare/vite-plugin).
 // Wrangler sigue en el repo por si desarrollas Workers aparte; el build web usa Nitro.
 export default defineConfig(({ mode }) => {
-  const loaded = loadEnv(mode, process.cwd(), "VITE_");
+  const root = process.cwd();
+  // Vite no vuelca por defecto OPENROUTER_API_KEY / OPENAI_API_KEY / AI_* a process.env;
+  // solo VITE_* va a import.meta.env. Las server functions leen process.env → sin esto,
+  // en local aparece «IA no configurada» aunque las claves estén en .env o .env.local.
+  const fromEnvFiles = loadEnv(mode, root, "");
+  for (const [key, value] of Object.entries(fromEnvFiles)) {
+    if (process.env[key] === undefined && value !== undefined) {
+      process.env[key] = value;
+    }
+  }
+
+  const loaded = loadEnv(mode, root, "VITE_");
   const envDefine: Record<string, string> = {};
   for (const [key, value] of Object.entries(loaded)) {
     envDefine[`import.meta.env.${key}`] = JSON.stringify(value);

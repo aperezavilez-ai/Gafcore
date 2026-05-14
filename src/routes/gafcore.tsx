@@ -129,13 +129,19 @@ function GafCoreLanding() {
     if (authLoading || !user?.id) return;
     void (async () => {
       const id = user.id;
-      const k = `gafcore_welcome_sync_v2_${id}`;
+      if (typeof window !== "undefined") {
+        sessionStorage.removeItem(`gafcore_welcome_sync_v2_${id}`);
+      }
+      const k = `gafcore_welcome_sync_v3_${id}`;
       if (typeof window !== "undefined" && sessionStorage.getItem(k)) return;
-      if (typeof window !== "undefined") sessionStorage.setItem(k, "1");
       try {
         await assignUserWelcome({ data: { accountType: "user" } });
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem(k, "1");
+          window.dispatchEvent(new Event("gafcore:credits-refresh"));
+        }
       } catch {
-        if (typeof window !== "undefined") sessionStorage.removeItem(k);
+        /* reintento en la próxima visita */
       }
     })();
   }, [authLoading, user?.id, assignUserWelcome]);

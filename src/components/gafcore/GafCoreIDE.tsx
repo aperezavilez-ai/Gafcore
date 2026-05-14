@@ -2,15 +2,23 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { GafCoreAuthDialog } from "@/components/ide/GafCoreAuthDialog";
 import { toast } from "sonner";
-import { loadProjectFiles, saveProjectFiles, getUserSupabase, listProjects, createProject, renameProject, getCurrentProjectId, setCurrentProjectId, listSecrets, type ProjectRow } from "@/lib/userSupabase";
-import { fileItemsFromBrowserFileList } from "@/lib/gafcore-import-files";
 import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
+  loadProjectFiles,
+  saveProjectFiles,
+  getUserSupabase,
+  listProjects,
+  createProject,
+  renameProject,
+  getCurrentProjectId,
+  setCurrentProjectId,
+  clearCurrentProjectId,
+  listSecrets,
+} from "@/lib/userSupabase";
+import { fileItemsFromBrowserFileList } from "@/lib/gafcore-import-files";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Toaster } from "@/components/ui/sonner";
 import {
+  LayoutGrid,
   Loader2,
   Settings as SettingsIcon,
   LogOut,
@@ -36,10 +44,10 @@ import {
   HelpCircle,
   Gift,
   ExternalLink,
-  Check,
   Plus,
   FolderOpen,
   Upload,
+  CreditCard,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -77,14 +85,40 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCredits } from "@/hooks/useCredits";
 import { useSubscription } from "@/hooks/useSubscription";
 import { getUserStats } from "@/lib/admin-users.functions";
+import { displayMonthlyAllowanceForUi } from "@/lib/gafcore-plan-credits.shared";
+import { CreditsOutModal } from "@/components/CreditsOutModal";
 
 type View = "preview" | "code";
+
+/** Nombre en la barra del IDE (no confundir con el nombre del proyecto en BD). */
+function ideUserToolbarName(
+  user: { email?: string | null; user_metadata?: Record<string, unknown> } | null | undefined,
+): string {
+  if (!user) return "Cuenta";
+  const meta = user.user_metadata ?? {};
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const full = str(meta.full_name);
+  if (full) return full;
+  const fn = str(meta.first_name);
+  const ln = str(meta.last_name);
+  const combined = [fn, ln].filter(Boolean).join(" ");
+  if (combined) return combined;
+  const local = user.email?.split("@")[0]?.trim();
+  if (local) return local;
+  return "Tu cuenta";
+}
 
 export function GafCoreIDE() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const { balance, monthlyAllowance, loading: creditsLoading, isUnlimitedDaily, refresh: refreshCredits } = useCredits(user?.id);
-  const { isAdmin, planDisplayLabel, subscription, subActive } = useSubscription(user?.id);
+  const {
+    balance,
+    monthlyAllowance,
+    loading: creditsLoading,
+    isUnlimitedDaily,
+    refresh: refreshCredits,
+  } = useCredits(user?.id);
+  const { isAdmin, subscription, subActive } = useSubscription(user?.id);
 
   const isFairUseCreadorPlan =
     !isAdmin &&
@@ -99,6 +133,8 @@ export function GafCoreIDE() {
   const [view, setView] = useState<View>("preview");
   const [previewKey, setPreviewKey] = useState(0);
   const [projectName, setProjectName] = useState("GafCore");
+  /** ID del proyecto activo (sincronizado con `setCurrentProjectId` en userSupabase). */
+  const [currentProjectId, setCurrentProjectIdState] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [secretsOpen, setSecretsOpen] = useState(false);
@@ -106,12 +142,15 @@ export function GafCoreIDE() {
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [projects, setProjects] = useState<ProjectRow[]>([]);
-  const [currentProjectId, setCurrentProjectIdState] = useState<string | null>(null);
+  const [importProjectDialogOpen, setImportProjectDialogOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
-  const [userStats, setUserStats] = useState<{ registered: number; connected: number; active24h: number } | null>(null);
+  const [userStats, setUserStats] = useState<{
+    registered: number;
+    connected: number;
+    active24h: number;
+  } | null>(null);
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [projectFolder, setProjectFolder] = useState<string>(() => {
@@ -119,8 +158,10 @@ export function GafCoreIDE() {
     return localStorage.getItem("gafcore_project_folder") ?? "src";
   });
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveErrToastAt = useRef(0);
   const importFolderInputRef = useRef<HTMLInputElement>(null);
   const importFilesInputRef = useRef<HTMLInputElement>(null);
+  const [creditsModalOpen, setCreditsModalOpen] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -138,63 +179,34 @@ export function GafCoreIDE() {
     toast.success("Pago confirmado. Créditos actualizados.");
   }, [refreshCredits]);
 
-  const visibleProjects = projects;
+  const displayMonthly = displayMonthlyAllowanceForUi({ isAdmin, subActive, monthlyAllowance });
   const creditsLabel = isAdmin
     ? "Ilimitados ∞"
     : isFairUseCreadorPlan || isUnlimitedDaily
       ? "Ilimitado (fair use)"
-    : creditsLoading
-      ? "Cargando…"
-      : monthlyAllowance > 0
-        ? `${balance.toLocaleString()} de ${monthlyAllowance.toLocaleString()}`
-        : `${balance.toLocaleString()} créditos`;
+      : creditsLoading
+        ? "Cargando…"
+        : `${balance.toLocaleString()} de ${displayMonthly.toLocaleString()}`;
   const creditsPercent =
-    isAdmin || isFairUseCreadorPlan || isUnlimitedDaily || monthlyAllowance <= 0
+    isAdmin || isFairUseCreadorPlan || isUnlimitedDaily || displayMonthly <= 0
       ? 100
-      : Math.max(0, Math.min(100, (balance / monthlyAllowance) * 100));
-
-  /** Texto corto junto al historial: plan ya va aparte; esto son solo créditos. */
-  const toolbarCreditsLine = isAdmin
-    ? "∞"
-    : creditsLoading
-      ? "…"
-      : isFairUseCreadorPlan || isUnlimitedDaily
-        ? "Ilimitado"
-        : monthlyAllowance > 0
-          ? `${balance.toLocaleString()}/${monthlyAllowance.toLocaleString()}`
-          : `${balance.toLocaleString()} créd.`;
+      : Math.max(0, Math.min(100, (balance / displayMonthly) * 100));
 
   const refreshProjects = async () => {
     const list = await listProjects();
-    setProjects(list);
     const cur = getCurrentProjectId();
-    setCurrentProjectIdState(cur);
-    const found = list.find((p) => p.id === cur);
-    if (found) setProjectName(found.name);
-  };
-
-  const switchProject = async (id: string, name: string) => {
-    setCurrentProjectId(id);
-    setCurrentProjectIdState(id);
-    setProjectName(name);
-    const remote = await loadProjectFiles();
-    if (remote && remote.length > 0) {
-      setFiles(remote);
-      setOpenTabs([remote[0].name]);
-      setActiveIndex(0);
-      setPreviewKey((k) => k + 1);
-      toast.success(`Cambiado a "${name}"`);
-    } else {
-      setFiles(initialFiles);
-      setOpenTabs([initialFiles[0].name]);
-      setActiveIndex(0);
-      setPreviewKey((k) => k + 1);
-      toast.success(`Abierto "${name}" (vacío)`);
+    const nextId = cur && list.some((p) => p.id === cur) ? cur : null;
+    if (!nextId) {
+      clearCurrentProjectId();
     }
+    setCurrentProjectIdState(nextId);
+    const found = nextId ? list.find((p) => p.id === nextId) : undefined;
+    if (found) setProjectName(found.name);
+    else if (list.length === 0) setProjectName("Sin proyecto");
   };
 
   const newProject = async () => {
-    const name = window.prompt("Nombre del nuevo proyecto", "Nuevo proyecto");
+    const name = window.prompt("Nombre del nuevo proyecto", "Mi proyecto");
     if (!name?.trim()) return;
     const created = await createProject(name.trim());
     if (!created) {
@@ -211,10 +223,10 @@ export function GafCoreIDE() {
     const saved = await saveProjectFiles(initialFiles);
     if (!saved) toast.error("Proyecto creado pero no se pudieron guardar los archivos iniciales");
     await refreshProjects();
-    toast.success(`Proyecto «${created.name}» creado. Elige otro en la lista cuando quieras.`);
+    toast.success(`Proyecto «${created.name}» creado. Puedes cambiar de proyecto en «Todos los proyectos».`);
   };
 
-  const applyImportedFiles = async (items: FileItem[], suggestedName: string) => {
+  const applyImportedFiles = async (items: FileItem[], suggestedName = "Mi proyecto") => {
     if (!items.length) {
       toast.error("No hay archivos importables.");
       return;
@@ -254,7 +266,7 @@ export function GafCoreIDE() {
         );
         return;
       }
-      await applyImportedFiles(items, "Proyecto importado");
+      await applyImportedFiles(items, "Mi proyecto");
     } catch (err) {
       console.error(err);
       toast.error("Error al leer la carpeta.");
@@ -268,10 +280,12 @@ export function GafCoreIDE() {
     try {
       const items = await fileItemsFromBrowserFileList(list);
       if (!items.length) {
-        toast.error("No se pudieron importar esos archivos. Usa extensiones de código (.ts, .tsx, .html, .css, etc.).");
+        toast.error(
+          "No se pudieron importar esos archivos. Usa extensiones de código (.ts, .tsx, .html, .css, etc.).",
+        );
         return;
       }
-      await applyImportedFiles(items, "Archivos importados");
+      await applyImportedFiles(items, "Mi proyecto");
     } catch (err) {
       console.error(err);
       toast.error("Error al importar archivos.");
@@ -285,12 +299,17 @@ export function GafCoreIDE() {
       return;
     }
     const n = window.prompt("Nuevo nombre del proyecto", projectName);
-    if (!n) return;
-    const ok = await renameProject(cur, n);
+    if (n === null) return;
+    const trimmed = n.trim();
+    if (!trimmed) {
+      toast.error("El nombre no puede estar vacío");
+      return;
+    }
+    const ok = await renameProject(cur, trimmed);
     if (ok) {
-      setProjectName(n);
+      setProjectName(trimmed);
       await refreshProjects();
-      toast.success(`Renombrado a "${n}"`);
+      toast.success(`Renombrado a «${trimmed}»`);
     } else {
       toast.error("No se pudo renombrar");
     }
@@ -317,6 +336,25 @@ export function GafCoreIDE() {
         setLoaded(true);
         return;
       }
+      const list = await listProjects();
+      if (list.length === 0) {
+        clearCurrentProjectId();
+        setCurrentProjectIdState(null);
+        setProjectName("Sin proyecto");
+        setFiles(initialFiles);
+        setOpenTabs([initialFiles[0].name]);
+        setLoaded(true);
+        return;
+      }
+      let activeId = getCurrentProjectId();
+      if (!activeId || !list.some((p) => p.id === activeId)) {
+        activeId = list[0].id;
+        setCurrentProjectId(activeId);
+      }
+      setCurrentProjectIdState(activeId);
+      const row = list.find((p) => p.id === activeId);
+      if (row) setProjectName(row.name);
+
       const remote = await loadProjectFiles();
       const appFile = remote?.find((f) => /^app\.(jsx?|tsx?)$/i.test(f.name));
       const isStale =
@@ -325,9 +363,16 @@ export function GafCoreIDE() {
         !appFile ||
         !/export\s+default/.test(appFile.content) ||
         /Hello\s*\(/.test(appFile.content) ||
-        /GafCore listo|Pídele algo a GafCore|Editor · App\.tsx|const \[code, setCode\]/.test(appFile.content);
+        /GafCore listo|Pídele algo a GafCore|Editor · App\.tsx|const \[code, setCode\]/.test(
+          appFile.content,
+        );
       if (!isStale) {
-        setFiles(remote!);
+        setFiles((prev) => {
+          const r = remote!;
+          const remoteNames = new Set(r.map((f) => f.name));
+          const extras = prev.filter((f) => !remoteNames.has(f.name));
+          return [...r, ...extras];
+        });
         setOpenTabs([remote![0].name]);
         toast.success(`Cargados ${remote!.length} archivos`);
       } else {
@@ -337,21 +382,29 @@ export function GafCoreIDE() {
         if (ok) toast.success(`Plantilla GafCore restaurada (${initialFiles.length} archivos)`);
       }
       setLoaded(true);
-      refreshProjects();
     })();
   }, []);
 
   useEffect(() => {
-    if (!loaded || !getUserSupabase()) return;
+    if (!loaded || !getUserSupabase() || !currentProjectId) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       const ok = await saveProjectFiles(files);
-      if (!ok) toast.error("No se pudo guardar");
+      if (!ok) {
+        const now = Date.now();
+        if (now - saveErrToastAt.current > 25_000) {
+          saveErrToastAt.current = now;
+          toast.error("No se pudo guardar", {
+            description:
+              "Revisa la conexión y que exista un proyecto en tu cuenta. Si acabas de entrar, espera unos segundos e inténtalo de nuevo.",
+          });
+        }
+      }
     }, 800);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [files, loaded]);
+  }, [files, loaded, currentProjectId]);
 
   const openFile = (i: number) => {
     setActiveIndex(i);
@@ -378,7 +431,12 @@ export function GafCoreIDE() {
       // Pre-flight: verify repo + branch exist with the given token
       const check = await fetch(
         `https://api.github.com/repos/${cfg.githubRepo}/branches/${encodeURIComponent(branch)}`,
-        { headers: { Authorization: `Bearer ${cfg.githubToken}`, Accept: "application/vnd.github+json" } },
+        {
+          headers: {
+            Authorization: `Bearer ${cfg.githubToken}`,
+            Accept: "application/vnd.github+json",
+          },
+        },
       );
       if (!check.ok) {
         if (check.status === 401 || check.status === 403) {
@@ -403,9 +461,8 @@ export function GafCoreIDE() {
       if (secrets.length > 0 && !excludeEnv) {
         const envContent =
           "# Generado por GafCore — secretos del proyecto\n" +
-          secrets
-            .map((s) => `${s.name}=${JSON.stringify(s.value)}`)
-            .join("\n") + "\n";
+          secrets.map((s) => `${s.name}=${JSON.stringify(s.value)}`).join("\n") +
+          "\n";
         filesToDeploy.push({ name: ".env", language: "plaintext", content: envContent });
         envIncluded = secrets.length;
       }
@@ -435,9 +492,7 @@ export function GafCoreIDE() {
         : excludeEnv && secrets.length
           ? ` (.env omitido — ${secrets.length} secretos no se subirán)`
           : "";
-      toast.message(
-        `Subiendo ${filesToDeploy.length} archivos a ${cfg.githubRepo}${envNote}…`,
-      );
+      toast.message(`Subiendo ${filesToDeploy.length} archivos a ${cfg.githubRepo}${envNote}…`);
       const r = await deployToGithub(filesToDeploy, {
         token: cfg.githubToken,
         repo: cfg.githubRepo,
@@ -470,7 +525,11 @@ export function GafCoreIDE() {
   return (
     <div
       className="gafcore-light flex h-screen flex-col overflow-hidden"
-      style={{ fontFamily: "'Inter', system-ui, sans-serif", background: "#ffffff", color: "#0f172a" }}
+      style={{
+        fontFamily: "'Inter', system-ui, sans-serif",
+        background: "#ffffff",
+        color: "#0f172a",
+      }}
     >
       <input
         ref={importFolderInputRef}
@@ -487,8 +546,53 @@ export function GafCoreIDE() {
         multiple
         onChange={onImportFilesChange}
       />
+      <Dialog open={importProjectDialogOpen} onOpenChange={setImportProjectDialogOpen}>
+        <DialogContent className="max-w-md border-border bg-background text-foreground">
+          <DialogHeader>
+            <DialogTitle>Importar proyecto</DialogTitle>
+            <DialogDescription>
+              Elige una carpeta con tu código o varios archivos. Después podrás poner nombre al
+              proyecto (puedes ponerle el nombre que quieras) y renombrarlo después.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2"
+              onClick={() => {
+                setImportProjectDialogOpen(false);
+                importFolderInputRef.current?.click();
+              }}
+            >
+              <FolderOpen className="h-4 w-4" />
+              Elegir carpeta
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="gap-2"
+              onClick={() => {
+                setImportProjectDialogOpen(false);
+                importFilesInputRef.current?.click();
+              }}
+            >
+              <Upload className="h-4 w-4" />
+              Elegir archivos
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => setImportProjectDialogOpen(false)}>
+              Cancelar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Top bar */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b px-3" style={{ background: "#ffffff", borderColor: "#e5e7eb" }}>
+      <header
+        className="flex h-12 shrink-0 items-center justify-between border-b px-3"
+        style={{ background: "#ffffff", borderColor: "#e5e7eb" }}
+      >
         {/* Left: logo + project */}
         <div className="flex min-w-0 items-center gap-1">
           <div
@@ -507,30 +611,38 @@ export function GafCoreIDE() {
           </div>
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
-              <button type="button" className="flex min-w-0 max-w-[min(100vw-200px,420px)] items-center gap-1.5 rounded-md px-2 py-1 text-[13px] font-medium hover:bg-muted">
-                <span className="truncate">{projectName}</span>
-                <span
-                  className="shrink-0 truncate rounded-md border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground max-w-[140px]"
-                  title={isAdmin ? "Administrador" : planDisplayLabel}
-                >
-                  {isAdmin ? "Admin" : planDisplayLabel}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <button
+                type="button"
+                className="flex min-w-0 max-w-[min(100vw-200px,420px)] items-center gap-1 rounded-md px-2 py-1 text-[13px] font-medium hover:bg-muted"
+                title="Cuenta, proyectos y ajustes"
+              >
+                <span className="truncate">{ideUserToolbarName(user)}</span>
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64" onCloseAutoFocus={(e) => e.preventDefault()}>
+            <DropdownMenuContent
+              align="start"
+              className="w-64"
+              onCloseAutoFocus={(e) => e.preventDefault()}
+            >
               <DropdownMenuItem onClick={() => navigate({ to: "/gafcore" })}>
                 <Home className="mr-2 h-4 w-4" />
                 Ir a inicio
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel className="flex items-center justify-between text-[12px] font-normal">
-                <span className="flex items-center gap-2">
-                  <span className="flex h-5 w-5 items-center justify-center rounded bg-muted text-[10px] font-bold">G</span>
-                  GafCore · {isAdmin ? "Administrador" : "Usuario"}
+              <DropdownMenuLabel className="flex items-start gap-2 text-[12px] font-normal">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-bold">
+                  G
                 </span>
-                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary max-w-[120px] truncate">
-                  {isAdmin ? "ADMIN" : planDisplayLabel}
+                <span className="min-w-0 flex-1 leading-snug">
+                  <span className="block truncate font-medium text-foreground">
+                    {ideUserToolbarName(user)}
+                  </span>
+                  {isAdmin ? (
+                    <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                      Administrador
+                    </span>
+                  ) : null}
                 </span>
               </DropdownMenuLabel>
               <div className="px-2 py-1.5">
@@ -539,67 +651,55 @@ export function GafCoreIDE() {
                   <span className="text-foreground">{creditsLabel}</span>
                 </div>
                 <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted">
-                  <div className="h-full rounded-full bg-foreground" style={{ width: `${creditsPercent}%` }} />
+                  <div
+                    className="h-full rounded-full bg-foreground"
+                    style={{ width: `${creditsPercent}%` }}
+                  />
                 </div>
               </div>
-              <DropdownMenuItem className="text-primary" onClick={() => navigate({ to: "/credits" })}>
+              <DropdownMenuItem className="text-primary" onClick={() => setCreditsModalOpen(true)}>
                 <Gift className="mr-2 h-4 w-4" />
-                Obtén créditos
+                Comprar créditos (paquetes)
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  navigate({ to: "/gafcore/settings/project", search: { section: "plans" } })
+                }
+              >
+                <CreditCard className="mr-2 h-4 w-4" />
+                <span className="flex-1">Pagos</span>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel className="flex items-center justify-between text-[11px] uppercase tracking-wide text-muted-foreground">
-                <span className="flex items-center gap-1.5"><FolderOpen className="h-3.5 w-3.5" /> Mis proyectos</span>
+                <span className="flex items-center gap-1.5">
+                  <FolderOpen className="h-3.5 w-3.5" /> Mis proyectos
+                </span>
                 <button
                   type="button"
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); newProject(); }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    newProject();
+                  }}
                   className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10.5px] font-medium text-primary hover:bg-primary/10"
-                  title="Nuevo proyecto"
+                  title="Crear proyecto nuevo"
                 >
                   <Plus className="h-3 w-3" /> Nuevo
                 </button>
               </DropdownMenuLabel>
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.preventDefault();
-                  importFolderInputRef.current?.click();
-                }}
-              >
-                <FolderOpen className="mr-2 h-4 w-4" />
-                Importar carpeta
+              <DropdownMenuItem onClick={() => void navigate({ to: "/gafcore/projects" })}>
+                <LayoutGrid className="mr-2 h-4 w-4" />
+                Todos los proyectos
               </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={(e) => {
                   e.preventDefault();
-                  importFilesInputRef.current?.click();
+                  setImportProjectDialogOpen(true);
                 }}
               >
                 <Upload className="mr-2 h-4 w-4" />
-                Importar archivos…
+                Importar proyecto (carpeta o archivos)
               </DropdownMenuItem>
-              <div className="max-h-48 overflow-y-auto">
-                {visibleProjects.map((p) => (
-                  <DropdownMenuItem
-                    key={p.id}
-                    onClick={() => switchProject(p.id, p.name)}
-                  >
-                    <FolderOpen className="mr-2 h-4 w-4 text-muted-foreground" />
-                    <span className="flex-1 truncate">{p.name}</span>
-                    {p.id === currentProjectId && <Check className="h-4 w-4 text-primary" />}
-                  </DropdownMenuItem>
-                ))}
-                {visibleProjects.length === 0 && (
-                  <div className="px-2 py-3 text-center">
-                    <p className="mb-2 text-[11px] text-muted-foreground">Aún no tienes proyectos</p>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); newProject(); }}
-                      className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90"
-                    >
-                      <Plus className="h-3 w-3" /> Crear proyecto
-                    </button>
-                  </div>
-                )}
-              </div>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => navigate({ to: "/gafcore/settings/project" })}>
                 <SettingsIcon className="mr-2 h-4 w-4" />
@@ -611,24 +711,32 @@ export function GafCoreIDE() {
                 <span className="flex-1">Conectores</span>
                 <span className="text-[11px] text-muted-foreground">Catálogo</span>
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={renameCurrent}>
+              <DropdownMenuItem
+                onSelect={() => {
+                  window.setTimeout(() => void renameCurrent(), 0);
+                }}
+              >
                 <Pencil className="mr-2 h-4 w-4" />
                 Cambiar el nombre del proyecto
               </DropdownMenuItem>
               <DropdownMenuItem
-                onClick={() => {
-                  const folder = window.prompt("Nombre de la carpeta destino", projectFolder);
-                  if (folder && folder.trim()) {
-                    const clean = folder.trim();
-                    setProjectFolder(clean);
-                    localStorage.setItem("gafcore_project_folder", clean);
-                    toast.success(`Proyecto movido a "${clean}"`);
-                  }
+                onSelect={() => {
+                  window.setTimeout(() => {
+                    const folder = window.prompt("Nombre de la carpeta destino", projectFolder);
+                    if (folder && folder.trim()) {
+                      const clean = folder.trim();
+                      setProjectFolder(clean);
+                      localStorage.setItem("gafcore_project_folder", clean);
+                      toast.success(`Proyecto movido a «${clean}»`);
+                    }
+                  }, 0);
                 }}
               >
                 <Folder className="mr-2 h-4 w-4" />
                 <span className="flex-1">Mover a carpeta</span>
-                <span className="max-w-[80px] truncate text-[11px] text-muted-foreground">{projectFolder}</span>
+                <span className="max-w-[80px] truncate text-[11px] text-muted-foreground">
+                  {projectFolder}
+                </span>
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setDetailsOpen(true)}>
                 <Info className="mr-2 h-4 w-4" />
@@ -677,7 +785,9 @@ export function GafCoreIDE() {
                   <span className="flex-1">Ayuda</span>
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent>
-                  <DropdownMenuItem onClick={() => openExternal("https://tanstack.com/start/latest")}>
+                  <DropdownMenuItem
+                    onClick={() => openExternal("https://tanstack.com/start/latest")}
+                  >
                     <ExternalLink className="mr-2 h-4 w-4" />
                     Documentación
                   </DropdownMenuItem>
@@ -697,7 +807,7 @@ export function GafCoreIDE() {
               </DropdownMenuSub>
             </DropdownMenuContent>
           </DropdownMenu>
-          <div className="ml-1 flex min-w-0 max-w-[min(320px,calc(100vw-420px))] items-center gap-1.5">
+          <div className="ml-1 flex items-center md:hidden">
             <button
               type="button"
               onClick={() => setHistoryOpen(true)}
@@ -706,27 +816,16 @@ export function GafCoreIDE() {
             >
               <History className="h-4 w-4" />
             </button>
-            <div
-              className="min-w-0 leading-tight"
-              title={isAdmin ? "Administrador — créditos ilimitados" : `${planDisplayLabel} — ${creditsLabel}`}
+          </div>
+          <div className="ml-1 hidden min-w-0 items-center gap-1.5 md:flex">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Historial de versiones"
             >
-              {!isAdmin ? (
-                <>
-                  <div className="truncate text-[11px] font-semibold text-foreground">{planDisplayLabel}</div>
-                  <div className="truncate text-[10px] font-medium tabular-nums text-muted-foreground">
-                    Créditos: {toolbarCreditsLine}
-                  </div>
-                </>
-              ) : (
-                <div className="flex flex-wrap items-center gap-x-1.5 text-[10px] font-medium text-muted-foreground">
-                  <span className="shrink-0 font-semibold text-foreground">Administrador</span>
-                  <span className="text-muted-foreground/70" aria-hidden>
-                    ·
-                  </span>
-                  <span className="tabular-nums">Créditos ilimitados</span>
-                </div>
-              )}
-            </div>
+              <History className="h-4 w-4" />
+            </button>
           </div>
           {isAdmin ? (
             <button
@@ -764,77 +863,124 @@ export function GafCoreIDE() {
           )}
         </div>
 
-        {/* Center: workspace tools */}
-        <div className="hidden items-center gap-0.5 md:flex">
-          <button
-            onClick={() => { setView("preview"); refreshPreview(); }}
-            className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium ${
-              view === "preview" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-            }`}
-            title="Preview · ver y recargar"
-          >
-            <Eye className="h-3.5 w-3.5" /> Preview
-          </button>
-          <button
-            onClick={() => setView("code")}
-            className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium ${
-              view === "code" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-            }`}
-            title="Código"
-          >
-            <Code2 className="h-3.5 w-3.5" /> Código
-          </button>
-          <button
-            onClick={() => setConnectorsOpen(true)}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="Cloud · backend e integraciones"
-          >
-            <Cloud className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => setAnalyticsOpen(true)}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="Analytics · GafCore"
-          >
-            <BarChart3 className="h-4 w-4" />
-          </button>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="Seguridad · ajustes"
-          >
-            <Shield className="h-4 w-4" />
-          </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" title="Más">
-                <MoreHorizontal className="h-4 w-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onClick={() => setAnalyticsOpen(true)}>
-                <BarChart3 className="mr-2 h-4 w-4" />
-                <span className="flex-1">Analítica GafCore</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => openExternal("https://supabase.com/dashboard/project/hbfbqqwetaynblmkezeu")}>
-                <Cloud className="mr-2 h-4 w-4" />
-                <span className="flex-1">Nube</span>
-                <ExternalLink className="h-3 w-3 text-muted-foreground" />
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setView("code")}>
-                <Code2 className="mr-2 h-4 w-4" />
-                <span className="flex-1">Código</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => navigate({ to: "/credits" })}>
-                <Gift className="mr-2 h-4 w-4" />
-                <span className="flex-1">Créditos y pagos</span>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
-                <Shield className="mr-2 h-4 w-4" />
-                <span className="flex-1">Seguridad</span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        {/* Centro: vista y herramientas (plan y créditos solo en el panel de chat) */}
+        <div className="hidden min-w-0 flex-1 items-center justify-center gap-2 px-1 md:flex">
+          <div className="flex shrink-0 items-center gap-0.5">
+            <button
+              onClick={() => {
+                setView("preview");
+                refreshPreview();
+              }}
+              className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium ${
+                view === "preview"
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+              title="Preview · ver y recargar"
+            >
+              <Eye className="h-3.5 w-3.5" /> Preview
+            </button>
+            <button
+              onClick={() => setView("code")}
+              className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium ${
+                view === "code"
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+              title="Código"
+            >
+              <Code2 className="h-3.5 w-3.5" /> Código
+            </button>
+            <button
+              onClick={() => setConnectorsOpen(true)}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Cloud · backend e integraciones"
+            >
+              <Cloud className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setAnalyticsOpen(true)}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Analytics · GafCore"
+            >
+              <BarChart3 className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Seguridad · ajustes"
+            >
+              <Shield className="h-4 w-4" />
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  title="Más"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                {isAdmin ? (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setSecretsOpen(true);
+                      }}
+                    >
+                      <KeyRound className="mr-2 h-4 w-4" />
+                      <span className="flex-1">Secretos del proyecto</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                ) : null}
+                <DropdownMenuItem onClick={() => setAnalyticsOpen(true)}>
+                  <BarChart3 className="mr-2 h-4 w-4" />
+                  <span className="flex-1">Analítica GafCore</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    openExternal("https://supabase.com/dashboard/project/hbfbqqwetaynblmkezeu")
+                  }
+                >
+                  <Cloud className="mr-2 h-4 w-4" />
+                  <span className="flex-1">Nube</span>
+                  <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setView("code")}>
+                  <Code2 className="mr-2 h-4 w-4" />
+                  <span className="flex-1">Código</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setView("code");
+                  }}
+                  title="Abre la vista Código con el explorador de archivos"
+                >
+                  <Folder className="mr-2 h-4 w-4" />
+                  <span className="flex-1">Archivos</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    navigate({ to: "/gafcore/settings/project", search: { section: "plans" } })
+                  }
+                  title="Plan actual, créditos y facturación"
+                >
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  <span className="flex-1">Pagos</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setCreditsModalOpen(true)}>
+                  <Gift className="mr-2 h-4 w-4" />
+                  <span className="flex-1">Comprar créditos (paquetes)</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                  <Shield className="mr-2 h-4 w-4" />
+                  <span className="flex-1">Seguridad</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
         {/* Right: actions */}
@@ -898,89 +1044,123 @@ export function GafCoreIDE() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden">
-        <ResizablePanelGroup orientation="horizontal">
-          {/* Left: Chat (fixed open) */}
-          <ResizablePanel id="chat" defaultSize="34%" minSize="28%" maxSize="55%">
-            <ChatPanel
-              files={files}
-              setFiles={setFiles}
-              projectId={currentProjectId}
-              onCodeGenerated={() => {
-                setView("preview");
-                setPreviewKey((k) => k + 1);
-              }}
-              onOpenSettings={() => setSettingsOpen(true)}
-              onOpenHistory={() => setHistoryOpen(true)}
-              onOpenConnectors={() => setConnectorsOpen(true)}
+      <div className="relative min-h-0 flex-1">
+        <main className="h-full overflow-hidden">
+          <ResizablePanelGroup orientation="horizontal" className="h-full">
+            {/* Left: Chat (fixed open) */}
+            <ResizablePanel id="chat" defaultSize="34%" minSize="28%" maxSize="55%">
+              <ChatPanel
+                files={files}
+                setFiles={setFiles}
+                projectId={currentProjectId}
+                onCodeGenerated={() => {
+                  setView("preview");
+                  setPreviewKey((k) => k + 1);
+                }}
+                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenHistory={() => setHistoryOpen(true)}
+                onOpenConnectors={() => setConnectorsOpen(true)}
+              />
+            </ResizablePanel>
+            <ResizableHandle
+              withHandle
+              className="w-1.5 bg-border hover:bg-primary/40 transition-colors"
             />
-          </ResizablePanel>
-          <ResizableHandle withHandle className="w-1.5 bg-border hover:bg-primary/40 transition-colors" />
 
-          {/* Right: Preview / Code workspace */}
-          <ResizablePanel id="workspace" minSize="45%">
-            <div className="flex h-full flex-col bg-muted/30">
-              {view === "preview" ? (
-                <div className="h-full p-3">
-                  <div className="h-full overflow-hidden rounded-lg border border-border bg-background shadow-sm">
-                    <LivePreview key={previewKey} files={files} />
-                  </div>
-                </div>
-              ) : (
-                <ResizablePanelGroup orientation="horizontal">
-                  <ResizablePanel defaultSize={18} minSize={12} maxSize={30}>
-                    <FileSidebar
-                      files={files}
-                      activeIndex={activeIndex}
-                      onSelect={openFile}
-                      setFiles={setFiles}
-                      setActiveIndex={setActiveIndex}
-                    />
-                  </ResizablePanel>
-                  <ResizableHandle className="bg-border w-px" />
-                  <ResizablePanel minSize={30}>
-                    <div className="flex h-full flex-col bg-background">
-                      <div className="flex h-9 items-center overflow-x-auto border-b border-border">
-                        {openTabs.map((name) => {
-                          const isActive = files[activeIndex]?.name === name;
-                          return (
-                            <div
-                              key={name}
-                              onClick={() => {
-                                const i = files.findIndex((f) => f.name === name);
-                                if (i >= 0) setActiveIndex(i);
-                              }}
-                              className={`group flex h-full cursor-pointer items-center gap-2 border-r border-border px-3 text-[12px] ${
-                                isActive
-                                  ? "bg-background text-foreground border-b-2 border-b-primary"
-                                  : "bg-muted/40 text-muted-foreground hover:text-foreground"
-                              }`}
-                            >
-                              <span>{name}</span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  closeTab(name);
-                                }}
-                                className="opacity-0 group-hover:opacity-100 hover:text-foreground"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className="flex-1">
-                        <CodeEditor files={files} setFiles={setFiles} activeIndex={activeIndex} />
-                      </div>
+            {/* Right: Preview / Code workspace */}
+            <ResizablePanel id="workspace" minSize="45%">
+              <div className="flex h-full flex-col bg-muted/30">
+                {view === "preview" ? (
+                  <div className="h-full p-3">
+                    <div className="h-full overflow-hidden rounded-lg border border-border bg-background shadow-sm">
+                      <LivePreview key={previewKey} files={files} />
                     </div>
-                  </ResizablePanel>
-                </ResizablePanelGroup>
-              )}
+                  </div>
+                ) : (
+                  <ResizablePanelGroup orientation="horizontal">
+                    <ResizablePanel defaultSize={18} minSize={12} maxSize={30}>
+                      <FileSidebar
+                        files={files}
+                        activeIndex={activeIndex}
+                        onSelect={openFile}
+                        setFiles={setFiles}
+                        setActiveIndex={setActiveIndex}
+                      />
+                    </ResizablePanel>
+                    <ResizableHandle className="bg-border w-px" />
+                    <ResizablePanel minSize={30}>
+                      <div className="flex h-full flex-col bg-background">
+                        <div className="flex h-9 items-center overflow-x-auto border-b border-border">
+                          {openTabs.map((name) => {
+                            const isActive = files[activeIndex]?.name === name;
+                            return (
+                              <div
+                                key={name}
+                                onClick={() => {
+                                  const i = files.findIndex((f) => f.name === name);
+                                  if (i >= 0) setActiveIndex(i);
+                                }}
+                                className={`group flex h-full cursor-pointer items-center gap-2 border-r border-border px-3 text-[12px] ${
+                                  isActive
+                                    ? "bg-background text-foreground border-b-2 border-b-primary"
+                                    : "bg-muted/40 text-muted-foreground hover:text-foreground"
+                                }`}
+                              >
+                                <span>{name}</span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    closeTab(name);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 hover:text-foreground"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="flex-1">
+                          <CodeEditor files={files} setFiles={setFiles} activeIndex={activeIndex} />
+                        </div>
+                      </div>
+                    </ResizablePanel>
+                  </ResizablePanelGroup>
+                )}
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </main>
+        {loaded && getUserSupabase() && !currentProjectId ? (
+          <div
+            className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-4 border-t border-border bg-background/95 px-6 text-center backdrop-blur-sm"
+            role="status"
+            aria-live="polite"
+          >
+            <p className="max-w-md text-[15px] font-semibold text-foreground">
+              Crea tu primer proyecto o importa uno
+            </p>
+            <p className="max-w-md text-[13px] text-muted-foreground">
+              No creamos proyectos automáticamente. Usa «+ Nuevo» o importa una carpeta o archivos
+              para empezar.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button type="button" onClick={() => void newProject()}>
+                <Plus className="mr-2 h-4 w-4" />
+                Crear proyecto
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setImportProjectDialogOpen(true)}
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Importar proyecto
+              </Button>
             </div>
-          </ResizablePanel>
-        </ResizablePanelGroup>
-      </main>
+          </div>
+        ) : null}
+      </div>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <HistoryDialog
@@ -996,8 +1176,25 @@ export function GafCoreIDE() {
       />
       {isAdmin ? <SecretsDialog open={secretsOpen} onOpenChange={setSecretsOpen} /> : null}
       <ConnectorsDialog open={connectorsOpen} onOpenChange={setConnectorsOpen} />
-      <GafCoreAnalyticsDialog open={analyticsOpen} onOpenChange={setAnalyticsOpen} userId={user?.id} />
+      <GafCoreAnalyticsDialog
+        open={analyticsOpen}
+        onOpenChange={setAnalyticsOpen}
+        userId={user?.id}
+      />
       <GafCoreAuthDialog open={authOpen} onOpenChange={setAuthOpen} initialMode={authMode} />
+
+      <CreditsOutModal
+        open={creditsModalOpen}
+        onOpenChange={setCreditsModalOpen}
+        userId={user?.id}
+        userEmail={user?.email ?? undefined}
+        reason="buy"
+        returnUrl={
+          typeof window !== "undefined"
+            ? `${window.location.origin}/gafcore/app?credits=success`
+            : "/gafcore/app?credits=success"
+        }
+      />
 
       <Dialog open={usersOpen} onOpenChange={setUsersOpen}>
         <DialogContent className="max-w-md">
@@ -1030,7 +1227,9 @@ export function GafCoreIDE() {
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setUsersOpen(false)}>Cerrar</Button>
+            <Button variant="outline" onClick={() => setUsersOpen(false)}>
+              Cerrar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1042,15 +1241,35 @@ export function GafCoreIDE() {
             <DialogDescription>Información del proyecto activo en GafCore.</DialogDescription>
           </DialogHeader>
           <div className="space-y-2 text-sm">
-            <div className="flex justify-between border-b pb-1.5"><span className="text-muted-foreground">Nombre</span><span className="font-medium">{projectName}</span></div>
-            <div className="flex justify-between border-b pb-1.5"><span className="text-muted-foreground">ID</span><span className="font-mono text-[11px]">{currentProjectId ?? "—"}</span></div>
-            <div className="flex justify-between border-b pb-1.5"><span className="text-muted-foreground">Archivos</span><span>{files.length}</span></div>
-            <div className="flex justify-between border-b pb-1.5"><span className="text-muted-foreground">Carpeta</span><span>{projectFolder}</span></div>
-            <div className="flex justify-between border-b pb-1.5"><span className="text-muted-foreground">Usuario</span><span className="truncate max-w-[60%]">{user?.email ?? "Invitado"}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Plan</span><span>{isAdmin ? "Administrador" : "Estándar"}</span></div>
+            <div className="flex justify-between border-b pb-1.5">
+              <span className="text-muted-foreground">Nombre</span>
+              <span className="font-medium">{projectName}</span>
+            </div>
+            <div className="flex justify-between border-b pb-1.5">
+              <span className="text-muted-foreground">ID</span>
+              <span className="font-mono text-[11px]">{currentProjectId ?? "—"}</span>
+            </div>
+            <div className="flex justify-between border-b pb-1.5">
+              <span className="text-muted-foreground">Archivos</span>
+              <span>{files.length}</span>
+            </div>
+            <div className="flex justify-between border-b pb-1.5">
+              <span className="text-muted-foreground">Carpeta</span>
+              <span>{projectFolder}</span>
+            </div>
+            <div className="flex justify-between border-b pb-1.5">
+              <span className="text-muted-foreground">Usuario</span>
+              <span className="truncate max-w-[60%]">{user?.email ?? "Invitado"}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Plan</span>
+              <span>{isAdmin ? "Administrador" : "Estándar"}</span>
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDetailsOpen(false)}>Cerrar</Button>
+            <Button variant="outline" onClick={() => setDetailsOpen(false)}>
+              Cerrar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1072,12 +1291,16 @@ export function GafCoreIDE() {
             ].map(([k, d]) => (
               <div key={k} className="flex items-center justify-between border-b py-1.5">
                 <span className="text-muted-foreground">{d}</span>
-                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">{k}</kbd>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">
+                  {k}
+                </kbd>
               </div>
             ))}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setHelpOpen(false)}>Cerrar</Button>
+            <Button variant="outline" onClick={() => setHelpOpen(false)}>
+              Cerrar
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

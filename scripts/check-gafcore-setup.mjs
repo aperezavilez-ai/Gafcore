@@ -1,0 +1,124 @@
+/**
+ * Diagnóstico local: variables necesarias para GafCore (Supabase + IA + pagos opcional).
+ * No imprime valores secretos.
+ *
+ * Uso (raíz del proyecto):
+ *   npm run gafcore:doctor
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const root = process.cwd();
+
+/** @type {Record<string, string>} */
+const env = {};
+
+function mergeEnvFile(name) {
+  const p = resolve(root, name);
+  if (!existsSync(p)) return;
+  const raw = readFileSync(p, "utf8");
+  for (const line of raw.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const eq = t.indexOf("=");
+    if (eq < 1) continue;
+    const k = t.slice(0, eq).trim();
+    let v = t.slice(eq + 1).trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))
+      v = v.slice(1, -1);
+    env[k] = v;
+  }
+}
+
+// Mismo criterio que Vite: .env.local sobrescribe .env
+for (const name of [".env", ".env.development", ".env.local"]) {
+  mergeEnvFile(name);
+}
+
+function has(k) {
+  const v = env[k];
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+function mask(k) {
+  if (!has(k)) return "(vacío)";
+  const v = env[k].trim();
+  if (v.length <= 8) return "***";
+  return `${v.slice(0, 4)}…${v.slice(-3)} (${v.length} caracteres)`;
+}
+
+function aiConfigured() {
+  if (has("AI_CHAT_COMPLETIONS_URL") && has("AI_API_KEY")) return true;
+  if (has("OPENROUTER_API_KEY")) return true;
+  if (has("OPENAI_API_KEY")) return true;
+  return false;
+}
+
+const issues = [];
+const ok = [];
+
+if (has("VITE_SUPABASE_URL")) {
+  const u = env.VITE_SUPABASE_URL.trim();
+  if (!u.startsWith("https://")) issues.push("VITE_SUPABASE_URL debe empezar por https://");
+  else ok.push("VITE_SUPABASE_URL");
+} else issues.push("Falta VITE_SUPABASE_URL");
+
+if (has("VITE_SUPABASE_PUBLISHABLE_KEY")) ok.push("VITE_SUPABASE_PUBLISHABLE_KEY");
+else issues.push("Falta VITE_SUPABASE_PUBLISHABLE_KEY");
+
+if (has("SUPABASE_URL")) ok.push("SUPABASE_URL");
+else if (has("VITE_SUPABASE_URL"))
+  issues.push(
+    "Falta SUPABASE_URL: el servidor no lee solo VITE_SUPABASE_URL; añade SUPABASE_URL con la misma URL https://….supabase.co",
+  );
+else issues.push("Falta SUPABASE_URL (servidor / webhooks)");
+
+if (has("SUPABASE_SERVICE_ROLE_KEY")) ok.push("SUPABASE_SERVICE_ROLE_KEY");
+else issues.push("Falta SUPABASE_SERVICE_ROLE_KEY (cliente admin en servidor)");
+
+if (has("SUPABASE_PUBLISHABLE_KEY")) ok.push("SUPABASE_PUBLISHABLE_KEY (obligatoria para /api/* auth: getClaims)");
+else
+  issues.push(
+    "Falta SUPABASE_PUBLISHABLE_KEY: el servidor la usa en rutas API (p. ej. chat/stream), distinta de VITE_. Copia el mismo valor que VITE_SUPABASE_PUBLISHABLE_KEY.",
+  );
+
+if (aiConfigured()) ok.push("IA: OPENAI_API_KEY u OPENROUTER_API_KEY o AI_CHAT_COMPLETIONS_URL+AI_API_KEY");
+else
+  issues.push(
+    "Falta configuración de IA: define OPENAI_API_KEY, o OPENROUTER_API_KEY, o AI_CHAT_COMPLETIONS_URL + AI_API_KEY",
+  );
+
+if (has("VITE_PAYMENTS_CLIENT_TOKEN")) ok.push("VITE_PAYMENTS_CLIENT_TOKEN (Stripe publishable)");
+else ok.push("VITE_PAYMENTS_CLIENT_TOKEN (opcional si aún no usas pagos en cliente)");
+
+console.log("\n=== GafCore — diagnóstico de entorno (.env) ===\n");
+console.log("Archivos leídos (si existen): .env, .env.development, .env.local\n");
+for (const k of [
+  "VITE_SUPABASE_URL",
+  "VITE_SUPABASE_PUBLISHABLE_KEY",
+  "VITE_SUPABASE_PROJECT_ID",
+  "SUPABASE_URL",
+  "SUPABASE_PUBLISHABLE_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "OPENAI_API_KEY",
+  "OPENROUTER_API_KEY",
+  "AI_MODEL_FAST",
+  "AI_MODEL_DEEP",
+]) {
+  console.log(`  ${k}: ${mask(k)}`);
+}
+
+if (issues.length === 0) {
+  console.log("\n✓ Variables críticas presentes para Supabase + IA.\n");
+  console.log("Siguientes pasos (manual, panel web):");
+  console.log("  1. Supabase → Authentication → URL Configuration → añade tu URL local y producción.");
+  console.log("  2. Aplica migraciones: supabase db push (CLI) o SQL Editor con supabase/migrations/.");
+  console.log("  3. npm run dev → prueba /gafcore/app; si el chat falla, F12 → Red → chat/stream → campo error.\n");
+  process.exit(0);
+}
+
+console.log("\n✗ Hay problemas:\n");
+for (const m of issues) console.log(`  - ${m}`);
+console.log("\nCorrige el .env en la raíz del proyecto, guarda y vuelve a ejecutar: npm run gafcore:doctor\n");
+process.exit(1);

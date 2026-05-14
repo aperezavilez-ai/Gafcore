@@ -66,7 +66,7 @@ type StripeInvoicePayload = {
   };
 };
 
-// Plan → monthly credits + tier (usa lookup_key de Stripe o metadata gafcore_price_id / legado lovable_external_id)
+// Plan → monthly credits + tier (lookup_key de Stripe o metadata `gafcore_price_id` en el precio)
 // Creador uses 0 credits + tier='creador' so consume_credits applies the unlimited fair-use logic.
 const PLAN_CREDITS: Record<string, { credits: number; tier: string }> = {
   plan_basico_monthly: { credits: 70, tier: "basico" },
@@ -87,7 +87,7 @@ function resolveStripePlanPriceId(
   if (!price) return undefined;
   const meta = price.metadata ?? {};
   if (typeof price.lookup_key === "string" && price.lookup_key.length > 0) return price.lookup_key;
-  const ext = meta["gafcore_price_id"] ?? meta["lovable_external_id"];
+  const ext = meta["gafcore_price_id"];
   if (typeof ext === "string" && ext.length > 0) return ext;
   return price.id;
 }
@@ -212,14 +212,14 @@ type StripeCheckoutSession = {
   id: string;
   mode?: string;
   payment_status?: string;
-  metadata?: { userId?: string; gafcorePriceId?: string; lovablePriceId?: string };
+  metadata?: { userId?: string; gafcorePriceId?: string };
 };
 
 async function handleCheckoutCompleted(session: StripeCheckoutSession) {
   if (session.mode !== "payment") return;
   if (session.payment_status && session.payment_status !== "paid") return;
   const userId = session.metadata?.userId;
-  const priceId = session.metadata?.gafcorePriceId || session.metadata?.lovablePriceId;
+  const priceId = session.metadata?.gafcorePriceId;
   if (!userId || !priceId) return;
   const credits = creditsForPriceId(priceId);
   if (!credits) return;

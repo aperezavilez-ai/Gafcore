@@ -62,6 +62,9 @@ export function LandingHeader() {
           {!loading && user ? (
             <>
               <Button variant="ghost" size="sm" asChild>
+                <Link to="/gafcore/projects">Proyectos</Link>
+              </Button>
+              <Button variant="ghost" size="sm" asChild>
                 <Link to="/gafcore/app">{t("dash.dashboard")}</Link>
               </Button>
               <Button variant="outline" size="sm" onClick={handleSignOut}>
@@ -102,7 +105,14 @@ export function LandingHeader() {
               {!loading && user ? (
                 <>
                   <Button variant="ghost" size="sm" asChild>
-                    <Link to="/gafcore/app">{t("dash.dashboard")}</Link>
+                    <Link to="/gafcore/projects" onClick={() => setMobileOpen(false)}>
+                      Proyectos
+                    </Link>
+                  </Button>
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link to="/gafcore/app" onClick={() => setMobileOpen(false)}>
+                      {t("dash.dashboard")}
+                    </Link>
                   </Button>
                   <Button variant="outline" size="sm" onClick={handleSignOut}>
                     {t("nav.signOut")}

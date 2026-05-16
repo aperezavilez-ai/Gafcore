@@ -8,7 +8,20 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const text = readFileSync(join(root, ".env"), "utf8");
+const envPath = [join(root, ".env.local"), join(root, ".env")].find((p) => {
+  try {
+    readFileSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+});
+if (!envPath) {
+  console.error("No existe .env.local ni .env en la raíz del proyecto.");
+  process.exit(1);
+}
+console.log(`Leyendo: ${envPath}\n`);
+const text = readFileSync(envPath, "utf8");
 
 for (let line of text.split(/\r?\n/)) {
   line = line.trim();
@@ -23,7 +36,7 @@ for (let line of text.split(/\r?\n/)) {
   ) {
     val = val.slice(1, -1);
   }
-  if (!key) continue;
+  if (!key || val.length === 0) continue;
   process.stdout.write(`Pushing ${key} …\n`);
   const r = spawnSync(
     "npx",

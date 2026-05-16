@@ -107,6 +107,33 @@ function extractAltNearSrc(html: string, src: string): string {
 
 let _picsumSlot = 0;
 
+export function isPaintThemedInstruction(text: string): boolean {
+  return /pintura|coating|coatings|paint|barniz|fachada|latex|primer|premier|interior|exterior|mastering/i.test(
+    text,
+  );
+}
+
+/** Sustituye Picsum/Unsplash genéricos por semillas gafcore-paint-* (hero + productos). */
+export function rewritePaintThemeMediaUrls(source: string, instruction = ""): string {
+  if (!isPaintThemedInstruction(`${instruction}\n${source}`)) return source;
+  let slot = 0;
+  const nextUrl = () => {
+    const isHero = slot === 0;
+    const url = themedPicsumUrl(
+      isHero ? "hero" : `product-${slot}`,
+      instruction,
+      slot,
+      isHero ? 1280 : 600,
+      isHero ? 720 : 600,
+    );
+    slot += 1;
+    return url;
+  };
+  return source
+    .replace(/https:\/\/picsum\.photos\/seed\/[^"'`)\s]+(?:\/\d+)?(?:\/\d+)?/g, nextUrl)
+    .replace(/https:\/\/images\.unsplash\.com\/[^"'`)\s]+/g, nextUrl);
+}
+
 /** Rutas locales / rotas → Picsum temático; aplica a HTML y JSX. */
 export function applyPicsumFallbacksInSource(
   source: string,
@@ -125,7 +152,13 @@ export function applyPicsumFallbacksInSource(
     const url = themedPicsumUrl(src, instruction, _picsumSlot++, 600, 600);
     return `src={${JSON.stringify(url)}}`;
   });
+  out = rewritePaintThemeMediaUrls(out, instruction);
   return out;
+}
+
+/** Reparación completa para preview / post-proceso. */
+export function applyAllMediaRepairs(source: string, contextHint = ""): string {
+  return applyPicsumFallbacksInSource(source, contextHint);
 }
 
 /** @deprecated Usa applyPicsumFallbacksInSource */

@@ -5,7 +5,7 @@ import {
   injectPreviewFallbackScript,
   PREVIEW_IMG_FALLBACK_SCRIPT,
   repairHtmlMedia,
-  applyPicsumFallbacksInSource,
+  applyAllMediaRepairs,
 } from "@/lib/gafcore-media.shared";
 
 const ESM = "https://esm.sh";
@@ -87,6 +87,10 @@ export function LivePreview({ files }: { files: FileItem[] }) {
   /** Durante streaming de la IA, prioriza fluidez del IDE antes que cada frame del preview. */
   const deferredFiles = useDeferredValue(files);
   const srcDoc = useMemo(() => {
+    const mediaContextHint = deferredFiles
+      .map((f) => f.content)
+      .join("\n")
+      .slice(0, 4000);
     const jsFiles = deferredFiles.filter((f) => isJsModule(f.name));
     const cssFiles = deferredFiles.filter((f) => isCss(f.name));
 
@@ -129,7 +133,7 @@ export function LivePreview({ files }: { files: FileItem[] }) {
     const modulesPayload = jsFiles.map((f) => ({
       name: f.name,
       code: rewriteImports(
-        applyPicsumFallbacksInSource(repairHtmlMedia(f.content, assetMap)),
+        applyAllMediaRepairs(repairHtmlMedia(f.content, assetMap), mediaContextHint),
         f.name,
         jsFiles,
         cssNames,

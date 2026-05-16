@@ -22,6 +22,56 @@ export function picsumFallbackUrl(seed: string, w = 1280, h = 720): string {
   return `https://picsum.photos/seed/${s}/${w}/${h}`;
 }
 
+/** Semillas estables por tema (Picsum devuelve la misma foto por seed). */
+const PAINTING_SEEDS = [
+  "gafcore-paint-hero-kitchen",
+  "gafcore-paint-product-1",
+  "gafcore-paint-product-2",
+  "gafcore-paint-product-3",
+  "gafcore-paint-product-4",
+  "gafcore-paint-product-5",
+  "gafcore-paint-exterior",
+  "gafcore-paint-interior",
+];
+
+export function themedPicsumUrl(
+  label: string,
+  instruction: string,
+  slot = 0,
+  w = 800,
+  h = 600,
+): string {
+  const ctx = `${instruction} ${label}`.toLowerCase();
+  const paint =
+    /pintura|coating|coatings|paint|barniz|fachada|interior|exterior|latex|primer|commercial|residential|premier/i.test(
+      ctx,
+    );
+  if (paint) {
+    const seed = PAINTING_SEEDS[slot % PAINTING_SEEDS.length];
+    return picsumFallbackUrl(seed, w, h);
+  }
+  return picsumFallbackUrl(label || `slot-${slot}`, w, h);
+}
+
+/** Rutas locales o placeholders que el preview no puede cargar. */
+export function isUnresolvableImageSrc(src: string): boolean {
+  const s = src.trim();
+  if (!s || s === "#") return true;
+  if (s.startsWith("data:")) return false;
+  if (s.startsWith("https://picsum.photos/")) return false;
+  if (!s.startsWith("http")) return true;
+  if (/^https?:\/\/(?:www\.)?example\.com/i.test(s)) return true;
+  if (
+    /^https:\/\/images\.unsplash\.com\//i.test(s) &&
+    !/photo-\d{6,}-[a-f0-9]{6,}/i.test(s)
+  ) {
+    return true;
+  }
+  if (/image_\d+\.(png|jpe?g|webp)/i.test(s)) return true;
+  if (/\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(s) && !/^https?:\/\//i.test(s)) return true;
+  return false;
+}
+
 function resolveAssetSrc(src: string, assetMap: Record<string, string>): string {
   const t = src.trim();
   if (t.startsWith("data:") || t.startsWith("https://") || t.startsWith("http://")) return t;
@@ -55,29 +105,60 @@ function extractAltNearSrc(html: string, src: string): string {
   return re2.exec(html)?.[1] ?? src;
 }
 
-/** Rutas locales sin asset → picsum; mantiene data: y https que ya resolvieron. */
-export function applyPicsumFallbacksInHtml(html: string): string {
-  return html.replace(IMG_SRC_RE, (tag, src: string) => {
+let _picsumSlot = 0;
+
+/** Rutas locales / rotas → Picsum temático; aplica a HTML y JSX. */
+export function applyPicsumFallbacksInSource(
+  source: string,
+  instruction = "",
+): string {
+  _picsumSlot = 0;
+  let out = source.replace(IMG_SRC_RE, (tag, src: string) => {
     const s = src.trim();
-    if (s.startsWith("data:") || s.startsWith("https://") || s.startsWith("http://")) return tag;
-    const seed = extractAltNearSrc(html, src);
-    const url = picsumFallbackUrl(seed);
+    if (!isUnresolvableImageSrc(s)) return tag;
+    const alt = extractAltNearSrc(source, src);
+    const url = themedPicsumUrl(alt, instruction, _picsumSlot++, s.includes("hero") ? 1280 : 800, 600);
     return tag.replace(src, url);
   });
+  out = out.replace(/src=\{["']([^"']+)["']\}/g, (tag, src: string) => {
+    if (!isUnresolvableImageSrc(src)) return tag;
+    const url = themedPicsumUrl(src, instruction, _picsumSlot++, 600, 600);
+    return `src={${JSON.stringify(url)}}`;
+  });
+  return out;
+}
+
+/** @deprecated Usa applyPicsumFallbacksInSource */
+export function applyPicsumFallbacksInHtml(html: string): string {
+  return applyPicsumFallbacksInSource(html);
 }
 
 export const PREVIEW_IMG_FALLBACK_SCRIPT = `<script>
 (function(){
+  var seeds = ['gafcore-paint-hero-kitchen','gafcore-paint-product-1','gafcore-paint-product-2','gafcore-paint-product-3','gafcore-paint-product-4','gafcore-paint-product-5'];
+  var si = 0;
   function fallback(img){
     if (img.dataset.gafcoreFb) return;
     img.dataset.gafcoreFb = '1';
-    var seed = encodeURIComponent((img.alt || img.getAttribute('data-seed') || 'gafcore').trim().slice(0,48) || 'gafcore');
-    img.src = 'https://picsum.photos/seed/' + seed + '/1280/720';
+    var label = (img.alt || img.getAttribute('data-seed') || 'gafcore-product').trim().slice(0,48);
+    var seed = seeds[si++ % seeds.length];
+    var w = img.width > 400 ? 1280 : 600;
+    var h = img.height > 400 ? 720 : 600;
+    img.src = 'https://picsum.photos/seed/' + encodeURIComponent(seed) + '/' + w + '/' + h;
   }
-  document.querySelectorAll('img').forEach(function(img){
-    img.addEventListener('error', function(){ fallback(img); });
-    if (img.complete && img.naturalWidth === 0) fallback(img);
-  });
+  function scan(){
+    document.querySelectorAll('img').forEach(function(img){
+      if (img.dataset.gafcoreBound) return;
+      img.dataset.gafcoreBound = '1';
+      img.addEventListener('error', function(){ fallback(img); });
+      if (img.complete && img.naturalWidth === 0) fallback(img);
+    });
+  }
+  scan();
+  var obs = new MutationObserver(scan);
+  obs.observe(document.documentElement, { childList: true, subtree: true });
+  setTimeout(scan, 400);
+  setTimeout(scan, 1200);
 })();
 <\/script>`;
 
@@ -91,15 +172,14 @@ export function injectPreviewFallbackScript(html: string): string {
 export function repairGafcoreProjectMedia(
   generated: ProjFile[],
   projectFiles: ProjFile[],
+  instruction = "",
 ): ProjFile[] {
   const assetMap = buildAssetUrlMap([...projectFiles, ...generated]);
   return generated.map((f) => {
     if (!/\.(html|htm|jsx|tsx|js|css)$/i.test(f.name)) return f;
     let content = repairHtmlMedia(f.content, assetMap);
-    if (/\.html?$/i.test(f.name)) {
-      content = applyPicsumFallbacksInHtml(content);
-      content = injectPreviewFallbackScript(content);
-    }
+    content = applyPicsumFallbacksInSource(content, instruction);
+    if (/\.html?$/i.test(f.name)) content = injectPreviewFallbackScript(content);
     return { ...f, content };
   });
 }

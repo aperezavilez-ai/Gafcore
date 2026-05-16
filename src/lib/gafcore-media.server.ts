@@ -1,11 +1,12 @@
 import type { ProjFile } from "@/lib/gafcore-chat.shared";
 import {
-  applyPicsumFallbacksInHtml,
+  applyPicsumFallbacksInSource,
   buildAssetUrlMap,
   collectHttpImageUrlsFromFiles,
   picsumFallbackUrl,
   repairGafcoreProjectMedia,
   repairHtmlMedia,
+  themedPicsumUrl,
 } from "@/lib/gafcore-media.shared";
 
 const HEAD_TIMEOUT_MS = 3500;
@@ -89,9 +90,10 @@ async function repairBrokenHttpImages(
       instruction,
     );
 
+  let slot = 0;
   for (const url of urls) {
     if (await urlReachable(url)) continue;
-    let replacement = picsumFallbackUrl(url.slice(-40));
+    let replacement = themedPicsumUrl(url, instruction, slot++, 800, 600);
 
     if (wantsGen && replicateUsed < MAX_REPLICATE_IMAGES && process.env.REPLICATE_API_TOKEN?.trim()) {
       const prompt =
@@ -118,14 +120,15 @@ export async function enrichGafcoreOutputFiles(
   projectFiles: ProjFile[],
   instruction: string,
 ): Promise<ProjFile[]> {
-  let files = repairGafcoreProjectMedia(generated, projectFiles);
+  let files = repairGafcoreProjectMedia(generated, projectFiles, instruction);
   const assetMap = buildAssetUrlMap([...projectFiles, ...files]);
   files = files.map((f) => {
     if (!/\.(html|htm|jsx|tsx|js|css)$/i.test(f.name)) return f;
     let content = repairHtmlMedia(f.content, assetMap);
-    if (/\.html?$/i.test(f.name)) content = applyPicsumFallbacksInHtml(content);
+    content = applyPicsumFallbacksInSource(content, instruction);
     return { ...f, content };
   });
+  // Segunda pasada: cualquier https que siga en src y falle HEAD
   files = await repairBrokenHttpImages(files, instruction);
   return files;
 }

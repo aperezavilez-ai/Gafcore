@@ -911,6 +911,7 @@ export function ChatPanel({
         let outFiles = repairGafcoreProjectMedia(
           result.files,
           files.map((f) => ({ name: f.name, content: f.content, language: f.language })),
+          instruction,
         );
         try {
           const enriched = await callEnrichMedia({

@@ -5,7 +5,7 @@ import {
   injectPreviewFallbackScript,
   PREVIEW_IMG_FALLBACK_SCRIPT,
   repairHtmlMedia,
-  applyPicsumFallbacksInHtml,
+  applyPicsumFallbacksInSource,
 } from "@/lib/gafcore-media.shared";
 
 const ESM = "https://esm.sh";
@@ -128,7 +128,12 @@ export function LivePreview({ files }: { files: FileItem[] }) {
     // Encode each module as its source string; the iframe transpiles + blob-URLs them.
     const modulesPayload = jsFiles.map((f) => ({
       name: f.name,
-      code: rewriteImports(repairHtmlMedia(f.content, assetMap), f.name, jsFiles, cssNames),
+      code: rewriteImports(
+        applyPicsumFallbacksInSource(repairHtmlMedia(f.content, assetMap)),
+        f.name,
+        jsFiles,
+        cssNames,
+      ),
     }));
 
     const cssPayload = cssFiles.map((f) => f.content).join("\n");

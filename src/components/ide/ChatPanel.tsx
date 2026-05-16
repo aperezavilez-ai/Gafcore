@@ -44,7 +44,10 @@ import { gafcoreChat } from "@/lib/gafcore-chat.functions";
 import { assignGafcoreAccountType } from "@/lib/gafcore-roles.functions";
 import { validateGafcoreSources } from "@/lib/gafcore-validate.functions";
 import { enrichGafcoreMedia } from "@/lib/enrich-gafcore-media.functions";
-import { repairGafcoreProjectMedia } from "@/lib/gafcore-media.shared";
+import {
+  repairCommonJsxSyntaxErrors,
+  repairGafcoreProjectMedia,
+} from "@/lib/gafcore-media.shared";
 import type { FileItem } from "@/components/ide/CodeEditor";
 import { CreditsOutModal } from "@/components/CreditsOutModal";
 import { supabase } from "@/integrations/supabase/client";
@@ -724,7 +727,31 @@ export function ChatPanel({
         taRef.current?.focus();
         toast.success(`Seleccionado: ${info.tag}`);
       } else if (data.type === "preview-error") {
-        setLastError(String(data.message || "Error desconocido"));
+        const msg = String(data.message || "Error desconocido");
+        const looksLikeJsxGlue =
+          /SyntaxError|Unexpected token/i.test(msg) ||
+          /"[^"]*"(https?:\/\/)/.test(msg);
+        if (looksLikeJsxGlue) {
+          setFiles((current) => {
+            const next = current.map((f) => {
+              if (!/\.(jsx|tsx|js|ts)$/i.test(f.name)) return f;
+              const content = repairCommonJsxSyntaxErrors(f.content);
+              return content !== f.content ? { ...f, content } : f;
+            });
+            const changed = next.some((f, i) => f.content !== current[i]?.content);
+            if (changed) {
+              queueMicrotask(() => {
+                toast.success("Sintaxis JSX reparada automáticamente");
+                setLastError(null);
+              });
+              return next;
+            }
+            queueMicrotask(() => setLastError(msg));
+            return current;
+          });
+        } else {
+          setLastError(msg);
+        }
       }
     };
     window.addEventListener("message", onMsg);

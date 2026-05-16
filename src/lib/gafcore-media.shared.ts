@@ -158,7 +158,7 @@ export function applyPicsumFallbacksInSource(
 
 /** Reparación completa para preview / post-proceso. */
 export function applyAllMediaRepairs(source: string, contextHint = ""): string {
-  return applyPicsumFallbacksInSource(source, contextHint);
+  return applyPicsumFallbacksInSource(repairCommonJsxSyntaxErrors(source), contextHint);
 }
 
 /** @deprecated Usa applyPicsumFallbacksInSource */
@@ -201,6 +201,29 @@ export function injectPreviewFallbackScript(html: string): string {
   return html + PREVIEW_IMG_FALLBACK_SCRIPT;
 }
 
+/**
+ * Quita URLs pegadas entre atributos JSX.
+ * Ej.: htmlFor="from"https://esm.sh/" className=… → htmlFor="from" className=…
+ */
+export function repairCommonJsxSyntaxErrors(source: string): string {
+  let out = source.replace(/="([^"]*)"(https?:\/\/[^\s"'<>]+)\/?"?/g, '="$1" ');
+  out = out.replace(/(\s)(https?:\/\/[^\s"'<>]+)\/?"(\s+[a-zA-Z_][\w-]*=)/g, "$1$3");
+  out = out.replace(/\s+(https?:\/\/[^\s"'<>]+)(?=\s+[a-zA-Z_][\w-]*=)/g, " ");
+  out = out.replace(/(\w)="([^"]*)"\s+"(\s+[a-zA-Z_][\w-]*=)/g, '$1="$2"$3');
+  return out;
+}
+
+/** Repara sintaxis JSX en todos los módulos del proyecto (p. ej. al cargar desde DB). */
+export function sanitizeProjectJsxFiles<T extends { name: string; content: string }>(
+  files: T[],
+): T[] {
+  return files.map((f) => {
+    if (!/\.(jsx|tsx|js|ts)$/i.test(f.name)) return f;
+    const content = repairCommonJsxSyntaxErrors(f.content);
+    return content !== f.content ? { ...f, content } : f;
+  });
+}
+
 /** Repara HTML/JSX en archivos generados + contexto del proyecto. */
 export function repairGafcoreProjectMedia(
   generated: ProjFile[],
@@ -211,6 +234,7 @@ export function repairGafcoreProjectMedia(
   return generated.map((f) => {
     if (!/\.(html|htm|jsx|tsx|js|css)$/i.test(f.name)) return f;
     let content = repairHtmlMedia(f.content, assetMap);
+    content = repairCommonJsxSyntaxErrors(content);
     content = applyPicsumFallbacksInSource(content, instruction);
     if (/\.html?$/i.test(f.name)) content = injectPreviewFallbackScript(content);
     return { ...f, content };

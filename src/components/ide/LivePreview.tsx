@@ -6,6 +6,7 @@ import {
   PREVIEW_IMG_FALLBACK_SCRIPT,
   repairHtmlMedia,
   applyAllMediaRepairs,
+  repairCommonJsxSyntaxErrors,
 } from "@/lib/gafcore-media.shared";
 
 const ESM = "https://esm.sh";
@@ -133,7 +134,10 @@ export function LivePreview({ files }: { files: FileItem[] }) {
     const modulesPayload = jsFiles.map((f) => ({
       name: f.name,
       code: rewriteImports(
-        applyAllMediaRepairs(repairHtmlMedia(f.content, assetMap), mediaContextHint),
+        applyAllMediaRepairs(
+          repairCommonJsxSyntaxErrors(repairHtmlMedia(f.content, assetMap)),
+          mediaContextHint,
+        ),
         f.name,
         jsFiles,
         cssNames,
@@ -218,10 +222,14 @@ export function LivePreview({ files }: { files: FileItem[] }) {
   const ENTRY = ${JSON.stringify(entry)};
   const blobMap = {};
 
+  function repairJsxGlue(code) {
+    return code.replace(/="([^"]*)"(https?:\\/\\/[^\\s"'<>]+)\\/?"?/g, '="$1" ');
+  }
+
   function transpile(code, filename) {
     const presets = [["env",{ modules:false, targets:"defaults" }], "react"];
     if (/\\.(ts|tsx)$/i.test(filename)) presets.push(["typescript",{ allExtensions:true, isTSX:true }]);
-    return Babel.transform(code, { filename, presets, sourceMaps: "inline" }).code;
+    return Babel.transform(repairJsxGlue(code), { filename, presets, sourceMaps: "inline" }).code;
   }
 
   function rewriteAppSpecifiers(code) {

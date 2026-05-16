@@ -15,6 +15,7 @@ import {
   listSecrets,
 } from "@/lib/userSupabase";
 import { fileItemsFromBrowserFileList } from "@/lib/gafcore-import-files";
+import { sanitizeProjectJsxFiles } from "@/lib/gafcore-media.shared";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Toaster } from "@/components/ui/sonner";
 import {
@@ -327,6 +328,14 @@ export function GafCoreIDE() {
   };
 
   useEffect(() => {
+    if (!loaded) return;
+    setFiles((prev) => {
+      const next = sanitizeProjectJsxFiles(prev);
+      return next.some((f, i) => f.content !== prev[i]?.content) ? next : prev;
+    });
+  }, [loaded]);
+
+  useEffect(() => {
     if (!isAdmin && secretsOpen) setSecretsOpen(false);
   }, [isAdmin, secretsOpen]);
 
@@ -367,14 +376,20 @@ export function GafCoreIDE() {
           appFile.content,
         );
       if (!isStale) {
+        const sanitized = sanitizeProjectJsxFiles(remote!);
+        const jsxFixed = sanitized.some((f, i) => f.content !== remote![i]?.content);
         setFiles((prev) => {
-          const r = remote!;
-          const remoteNames = new Set(r.map((f) => f.name));
+          const remoteNames = new Set(sanitized.map((f) => f.name));
           const extras = prev.filter((f) => !remoteNames.has(f.name));
-          return [...r, ...extras];
+          return [...sanitized, ...extras];
         });
-        setOpenTabs([remote![0].name]);
-        toast.success(`Cargados ${remote!.length} archivos`);
+        setOpenTabs([sanitized[0]?.name ?? remote![0].name]);
+        if (jsxFixed) void saveProjectFiles(sanitized);
+        toast.success(
+          jsxFixed
+            ? `Cargados ${sanitized.length} archivos (sintaxis JSX reparada)`
+            : `Cargados ${sanitized.length} archivos`,
+        );
       } else {
         const ok = await saveProjectFiles(initialFiles);
         setFiles(initialFiles);

@@ -100,7 +100,7 @@ export function StripeEmbeddedCheckout({ priceId, customerEmail, userId, returnU
             ? Object.keys(response as object).join(", ") || "respuesta vacía"
             : typeof response;
         throw new Error(
-          `El servidor no devolvió clientSecret del checkout (${hint}). Si acabas de configurar Stripe en Vercel, haz push del repo y redeploy (el checkout requiere ui_mode embedded en el servidor).`,
+          `El servidor no devolvió clientSecret del checkout (${hint}). Haz push del repo y redeploy en Vercel.`,
         );
       }
       assertCheckoutSecretMatchesPublishableKey(secret);

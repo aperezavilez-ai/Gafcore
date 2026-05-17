@@ -47,7 +47,7 @@ export const createCheckoutSession = createServerFn({ method: "POST" })
       session = await stripe.checkout.sessions.create({
         line_items: [{ price: stripePrice.id, quantity: 1 }],
         mode: isRecurring ? "subscription" : "payment",
-        ui_mode: "embedded",
+        ui_mode: "embedded_page",
         return_url: data.returnUrl,
         ...((data.customerEmail || authData.user.email) && {
           customer_email: data.customerEmail || authData.user.email,
@@ -83,7 +83,7 @@ export const createCheckoutSession = createServerFn({ method: "POST" })
         environment: data.environment,
       });
       throw new Error(
-        "Stripe no devolvió client_secret (¿deploy antiguo sin ui_mode embedded?). Haz push del código y redeploy en Vercel.",
+        "Stripe no devolvió client_secret (sesión embedded_page). Haz push del código y redeploy en Vercel.",
       );
     }
     /** `cs` evita posibles filtros de serialización sobre claves que contienen «secret». */

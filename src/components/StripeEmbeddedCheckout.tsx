@@ -12,12 +12,15 @@ interface Props {
   returnUrl?: string;
 }
 
-const CS_RE = /^cs_(test|live)_[A-Za-z0-9_-]{8,}$/;
+function isCheckoutClientSecret(value: string): boolean {
+  const s = value.trim();
+  return s.startsWith("cs_test_") || s.startsWith("cs_live_");
+}
 
 function readClientSecret(value: unknown): string | null {
   if (typeof value === "string") {
     const s = value.trim();
-    if (CS_RE.test(s)) return s;
+    if (isCheckoutClientSecret(s)) return s;
     return null;
   }
   if (!value || typeof value !== "object") return null;
@@ -40,7 +43,7 @@ function readClientSecret(value: unknown): string | null {
     if (!cur || typeof cur !== "object" || seen.has(cur)) continue;
     seen.add(cur);
     for (const v of Object.values(cur as Record<string, unknown>)) {
-      if (typeof v === "string" && CS_RE.test(v.trim())) return v.trim();
+      if (typeof v === "string" && isCheckoutClientSecret(v)) return v.trim();
       if (v && typeof v === "object") stack.push(v);
     }
   }
@@ -112,9 +115,28 @@ export function StripeEmbeddedCheckout({ priceId, customerEmail, userId, returnU
         throw new Error(errMsg);
       }
 
+      if (
+        payload &&
+        typeof payload === "object" &&
+        typeof (payload as { client_secret?: unknown }).client_secret === "string"
+      ) {
+        const direct = (payload as { client_secret: string }).client_secret.trim();
+        if (isCheckoutClientSecret(direct)) {
+          assertCheckoutSecretMatchesPublishableKey(direct);
+          setCheckoutError(null);
+          return direct;
+        }
+      }
+
       const secret = readClientSecret(payload);
       if (!secret) {
-        throw new Error("El servidor no devolvió client_secret del checkout.");
+        const preview =
+          payload && typeof payload === "object"
+            ? JSON.stringify(payload).slice(0, 160)
+            : String(payload);
+        throw new Error(
+          `El servidor no devolvió client_secret del checkout (HTTP ${res.status}: ${preview}).`,
+        );
       }
       assertCheckoutSecretMatchesPublishableKey(secret);
       setCheckoutError(null);

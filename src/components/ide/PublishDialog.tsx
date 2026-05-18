@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -12,25 +12,27 @@ import {
   Copy,
   Check,
   ExternalLink,
-  Shield,
   Settings as SettingsIcon,
   Loader2,
-  BarChart3,
-  Lock,
-  Plus,
   CheckCircle2,
   XCircle,
   Activity,
+  History,
 } from "lucide-react";
 import { toast } from "sonner";
-import { recordPublish, updatePublishRecord } from "@/lib/userSupabase";
+import {
+  listPublishes,
+  recordPublish,
+  updatePublishRecord,
+  type PublishRow,
+} from "@/lib/userSupabase";
+import type { GafcoreDeployResult } from "@/lib/gafcore-deploy.shared";
+import { normalizeDeployHost } from "@/lib/gafcore-deploy.shared";
 
 type CheckStatus = "idle" | "running" | "ok" | "fail";
 type CheckResult = {
   status: CheckStatus;
   httpStatus?: number;
-  finalUrl?: string;
-  redirectsToGafcore?: boolean;
   ms?: number;
   error?: string;
 };
@@ -39,74 +41,90 @@ type Visibility = "public" | "private";
 
 type Props = {
   children: React.ReactNode;
-  siteUrl?: string;
-  customDomain?: string | null;
-  visitors?: number;
+  /** Hostname del sitio del usuario (sin https://). */
+  siteHost?: string | null;
+  projectId?: string | null;
+  canPublish?: boolean;
   isUpdating?: boolean;
-  onUpdate?: () => void | Promise<void>;
+  onUpdate?: () => Promise<GafcoreDeployResult>;
   onOpenSettings?: () => void;
 };
 
 export function PublishDialog({
   children,
-  siteUrl = "gafcore.com",
-  customDomain = "gafcore.com",
-  visitors = 0,
+  siteHost,
+  projectId,
+  canPublish = true,
   isUpdating = false,
   onUpdate,
   onOpenSettings,
 }: Props) {
+  const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [check, setCheck] = useState<CheckResult>({ status: "idle" });
-  const displayUrl = customDomain ?? siteUrl;
-  const fullUrl = `https://${displayUrl}`;
-  // Always verify against the temp URL (custom domain may still be propagating)
-  const verifyUrl = `https://${siteUrl}`;
+  const [history, setHistory] = useState<PublishRow[]>([]);
 
-  const runVerification = async (publishId?: string | null) => {
+  const host = normalizeDeployHost(siteHost ?? null);
+  const fullUrl = host ? `https://${host}` : null;
+
+  const reloadHistory = useCallback(async () => {
+    const rows = await listPublishes(8, projectId ?? undefined);
+    setHistory(rows);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (open) void reloadHistory();
+  }, [open, reloadHistory]);
+
+  const runVerification = async (publishId?: string | null, verifyHost?: string | null) => {
+    const target = normalizeDeployHost(verifyHost ?? host);
+    if (!target) {
+      setCheck({
+        status: "fail",
+        error: "Configura la URL del sitio en Configuración → GitHub Deploy",
+      });
+      if (publishId) {
+        void updatePublishRecord(publishId, {
+          status: "fail",
+          error: "missing_deploy_site_url",
+        });
+      }
+      toast.error("Falta la URL del sitio publicado en configuración");
+      return;
+    }
+
     setCheck({ status: "running" });
     const started = performance.now();
+    const verifyUrl = `https://${target}`;
+
     try {
-      const rootRes = await fetch(verifyUrl + "/?_=" + Date.now(), {
+      const res = await fetch(`${verifyUrl}/?_=${Date.now()}`, {
         method: "GET",
         mode: "cors",
         cache: "no-store",
       }).catch((e) => {
-        throw new Error("No respondió: " + (e?.message ?? "network"));
+        throw new Error("No respondió: " + (e instanceof Error ? e.message : "network"));
       });
 
       const ms = Math.round(performance.now() - started);
-
-      const html = await rootRes.text();
-      const looksLikeGafCore =
-        /GafCore/i.test(html) || /Cargando GafCore/i.test(html) || /\/gafcore/.test(html);
-
-      const gafRes = await fetch(verifyUrl + "/gafcore?_=" + Date.now(), {
-        method: "GET",
-        mode: "cors",
-        cache: "no-store",
-      });
-
-      const ok = rootRes.ok && gafRes.ok && looksLikeGafCore;
+      const ok = res.ok;
       setCheck({
         status: ok ? "ok" : "fail",
-        httpStatus: rootRes.status,
-        finalUrl: rootRes.url,
-        redirectsToGafcore: looksLikeGafCore,
+        httpStatus: res.status,
         ms,
-        error: ok ? undefined : "Respondió pero no coincide con GafCore publicado",
+        error: ok ? undefined : `HTTP ${res.status}`,
       });
       if (publishId) {
         void updatePublishRecord(publishId, {
           status: ok ? "ok" : "fail",
-          http_status: rootRes.status,
+          http_status: res.status,
           latency_ms: ms,
-          error: ok ? null : "verification_mismatch",
+          error: ok ? null : `http_${res.status}`,
         });
       }
-      if (ok) toast.success(`Publicación verificada (${ms} ms)`);
-      else toast.error("Verificación falló — revisa los detalles");
+      if (ok) toast.success(`Sitio accesible (${ms} ms)`);
+      else toast.error(`Verificación falló — HTTP ${res.status}`);
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Error desconocido";
       setCheck({ status: "fail", error: message });
@@ -118,17 +136,62 @@ export function PublishDialog({
   };
 
   const handleUpdate = async () => {
-    await onUpdate?.();
-    // Registrar la publicación
+    if (!canPublish) {
+      toast.error("Configura GitHub y un proyecto activo antes de publicar", {
+        action: onOpenSettings
+          ? { label: "Configuración", onClick: onOpenSettings }
+          : undefined,
+      });
+      return;
+    }
+    if (!onUpdate) return;
+
+    let result: GafcoreDeployResult;
+    try {
+      result = await onUpdate();
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Error al publicar";
+      toast.error(message);
+      return;
+    }
+
+    if (!result.ok) {
+      toast.error(result.message);
+      return;
+    }
+
+    const verifyHost = result.siteHost ?? host;
+    const urlForRecord = verifyHost ? `https://${verifyHost}` : fullUrl;
+
     const publishId = await recordPublish({
-      url: fullUrl,
+      projectId: projectId ?? undefined,
+      url: urlForRecord ?? undefined,
       visibility,
       status: "pending",
+      fileCount: result.fileCount ?? 0,
+      metadata: {
+        repoUrl: result.repoUrl,
+        message: result.message,
+      },
     });
-    setTimeout(() => { void runVerification(publishId); }, 3000);
+
+    toast.success(result.message);
+    void reloadHistory();
+
+    if (verifyHost) {
+      setTimeout(() => {
+        void runVerification(publishId, verifyHost);
+      }, 5000);
+    } else {
+      toast.message("Publicado en GitHub. Añade la URL de Vercel en Configuración para verificar.");
+    }
   };
 
   const handleCopy = async () => {
+    if (!fullUrl) {
+      toast.error("Configura la URL del sitio en Configuración");
+      return;
+    }
     try {
       await navigator.clipboard.writeText(fullUrl);
       setCopied(true);
@@ -140,154 +203,113 @@ export function PublishDialog({
   };
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2">
-              <Globe className="h-4 w-4 text-primary" />
-              Publicado
-            </span>
-            <span className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
-              <BarChart3 className="h-3.5 w-3.5" />
-              {visitors} visitantes
-            </span>
+          <DialogTitle className="flex items-center gap-2">
+            <Globe className="h-4 w-4 text-primary" />
+            Publicar proyecto
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-5 pt-2">
-          {/* URL */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-foreground">
-                URL del sitio web
-              </label>
-              <button
-                type="button"
-                onClick={() => toast.info("Abre Project Settings → Domains para conectar tu dominio.")}
-                className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-              >
-                <Plus className="h-3 w-3" /> Agregar dominio personalizado
-              </button>
-            </div>
-            <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
-              <span className="flex-1 truncate text-sm text-foreground">{displayUrl}</span>
-              <button
-                onClick={handleCopy}
-                className="text-muted-foreground hover:text-foreground"
-                title="Copiar"
-              >
-                {copied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
-              </button>
-              <a
-                href={fullUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-muted-foreground hover:text-foreground"
-                title="Abrir"
-              >
-                <ExternalLink className="h-4 w-4" />
-              </a>
-            </div>
+            <label className="text-sm font-medium text-foreground">URL del sitio</label>
+            {host ? (
+              <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+                <span className="flex-1 truncate text-sm text-foreground">{host}</span>
+                <button
+                  type="button"
+                  onClick={() => void handleCopy()}
+                  className="text-muted-foreground hover:text-foreground"
+                  title="Copiar"
+                >
+                  {copied ? (
+                    <Check className="h-4 w-4 text-primary" />
+                  ) : (
+                    <Copy className="h-4 w-4" />
+                  )}
+                </button>
+                <a
+                  href={fullUrl!}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-muted-foreground hover:text-foreground"
+                  title="Abrir"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Aún no hay URL. Tras conectar Vercel al repo, pégala en{" "}
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline"
+                  onClick={onOpenSettings}
+                >
+                  Configuración
+                </button>
+                .
+              </p>
+            )}
           </div>
 
-          {/* Visibility */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-foreground">
-              ¿Quién puede ver este sitio web?
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setVisibility("public")}
-                className={`flex flex-col items-start gap-1 rounded-md border p-3 text-left transition ${
-                  visibility === "public"
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/40"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-semibold">Público</span>
-                </div>
-                <span className="text-xs text-muted-foreground">
-                  Cualquiera con la URL
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setVisibility("private")}
-                className={`flex flex-col items-start gap-1 rounded-md border p-3 text-left transition ${
-                  visibility === "private"
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/40"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Lock className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-semibold">Privado</span>
-                </div>
-                <span className="text-xs text-muted-foreground">
-                  Solo miembros del workspace
-                </span>
-              </button>
+          {history.length > 0 && (
+            <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+              <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <History className="h-3.5 w-3.5" />
+                Últimas publicaciones
+              </p>
+              <ul className="max-h-28 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                {history.map((row) => (
+                  <li key={row.id} className="flex justify-between gap-2">
+                    <span className="truncate">{row.url ?? "—"}</span>
+                    <span
+                      className={
+                        row.status === "ok"
+                          ? "shrink-0 text-primary"
+                          : row.status === "fail"
+                            ? "shrink-0 text-destructive"
+                            : "shrink-0"
+                      }
+                    >
+                      {row.status}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
-          </div>
+          )}
 
-          {/* Actions */}
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => toast.info("Ejecutando análisis de seguridad…")}
-              className="gap-1.5"
-            >
-              <Shield className="h-4 w-4" />
-              Revisar seguridad
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onOpenSettings}
-              className="gap-1.5"
-            >
-              <SettingsIcon className="h-4 w-4" />
-              Editar configuración
-            </Button>
-          </div>
-
-          {/* Update + Verify */}
           <div className="space-y-2">
             <Button
-              onClick={handleUpdate}
-              disabled={isUpdating || check.status === "running"}
+              onClick={() => void handleUpdate()}
+              disabled={isUpdating || check.status === "running" || !canPublish}
               className="w-full gap-2"
             >
               {isUpdating ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Actualizando…
+                  Publicando…
                 </>
               ) : (
                 <>
                   <Globe className="h-4 w-4" />
-                  Actualizar y verificar
+                  Publicar en GitHub
                 </>
               )}
             </Button>
             <p className="text-center text-xs text-muted-foreground leading-relaxed">
-              Esto sube los archivos del IDE al <strong className="text-foreground">repo de GitHub</strong> que
-              configuraste. Vercel construye <strong className="text-foreground">ese repo</strong>, no la carpeta
-              de tu PC (Cursor): ahí usa{" "}
-              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">npm run gafcore:push</code> o{" "}
-              <code className="rounded bg-muted px-1 py-0.5 text-[11px]">bun run gafcore:push</code>.
+              Sube los archivos del IDE al repo configurado. Si añadiste un Deploy Hook de Vercel,
+              se dispara el build automáticamente.
             </p>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => void runVerification()}
-              disabled={check.status === "running" || isUpdating}
+              disabled={check.status === "running" || isUpdating || !host}
               className="w-full gap-2 text-xs"
             >
               {check.status === "running" ? (
@@ -295,48 +317,51 @@ export function PublishDialog({
               ) : (
                 <Activity className="h-3.5 w-3.5" />
               )}
-              Verificar publicación ahora
+              Verificar sitio ahora
             </Button>
 
             {check.status !== "idle" && (
               <div
                 className={`rounded-md border p-3 text-xs space-y-1 ${
                   check.status === "ok"
-                    ? "border-emerald-500/40 bg-emerald-500/5"
+                    ? "border-primary/40 bg-primary/5"
                     : check.status === "fail"
-                    ? "border-destructive/40 bg-destructive/5"
-                    : "border-border bg-muted/30"
+                      ? "border-destructive/40 bg-destructive/5"
+                      : "border-border bg-muted/30"
                 }`}
               >
                 <div className="flex items-center gap-2 font-medium">
-                  {check.status === "ok" && <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
+                  {check.status === "ok" && <CheckCircle2 className="h-4 w-4 text-primary" />}
                   {check.status === "fail" && <XCircle className="h-4 w-4 text-destructive" />}
                   {check.status === "running" && <Loader2 className="h-4 w-4 animate-spin" />}
                   <span>
-                    {check.status === "ok" && "Publicación activa"}
+                    {check.status === "ok" && "Sitio accesible"}
                     {check.status === "fail" && "Verificación falló"}
                     {check.status === "running" && "Verificando…"}
                   </span>
                 </div>
-                <ul className="ml-5 list-disc text-muted-foreground space-y-0.5">
-                  <li>URL temporal: <code className="text-foreground">{siteUrl}</code></li>
-                  {check.httpStatus !== undefined && (
-                    <li>HTTP: <span className="text-foreground">{check.httpStatus}</span></li>
-                  )}
-                  {check.ms !== undefined && (
-                    <li>Latencia: <span className="text-foreground">{check.ms} ms</span></li>
-                  )}
-                  <li>
-                    Redirige a /gafcore:{" "}
-                    <span className={check.redirectsToGafcore ? "text-emerald-500" : "text-destructive"}>
-                      {check.redirectsToGafcore ? "sí" : "no"}
-                    </span>
-                  </li>
-                  {check.error && <li className="text-destructive">{check.error}</li>}
-                </ul>
+                {host && (
+                  <p className="text-muted-foreground">
+                    Host: <span className="text-foreground">{host}</span>
+                  </p>
+                )}
+                {check.httpStatus !== undefined && (
+                  <p className="text-muted-foreground">
+                    HTTP: <span className="text-foreground">{check.httpStatus}</span>
+                    {check.ms !== undefined ? ` · ${check.ms} ms` : ""}
+                  </p>
+                )}
+                {check.error && <p className="text-destructive">{check.error}</p>}
               </div>
             )}
           </div>
+
+          {onOpenSettings && (
+            <Button variant="outline" size="sm" onClick={onOpenSettings} className="w-full gap-1.5">
+              <SettingsIcon className="h-4 w-4" />
+              Configuración de deploy
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

@@ -7,6 +7,10 @@ export type IdeConfig = {
   githubRepo?: string; // "owner/repo"
   githubBranch?: string;
   githubExcludeEnv?: boolean; // No subir .env al repo
+  /** Hostname del sitio en producción (p. ej. mi-app.vercel.app) */
+  deploySiteUrl?: string;
+  /** POST URL del Deploy Hook de Vercel (opcional) */
+  vercelDeployHookUrl?: string;
 };
 
 const KEY = "ide.config";
@@ -25,6 +29,8 @@ export function getIdeConfig(): IdeConfig {
       githubRepo: main.githubRepo,
       githubBranch: main.githubBranch ?? "main",
       githubExcludeEnv: main.githubExcludeEnv ?? true,
+      deploySiteUrl: main.deploySiteUrl,
+      vercelDeployHookUrl: main.vercelDeployHookUrl,
     };
   } catch {
     return {};

@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { getIdeConfig, setIdeConfig } from "@/lib/ideConfig";
+import { ensureProjectId, saveProjectDeployMeta } from "@/lib/userSupabase";
 
 export function SettingsDialog({
   children,
@@ -38,6 +39,8 @@ export function SettingsDialog({
   const [githubRepo, setGithubRepo] = useState("");
   const [githubBranch, setGithubBranch] = useState("main");
   const [githubExcludeEnv, setGithubExcludeEnv] = useState(true);
+  const [deploySiteUrl, setDeploySiteUrl] = useState("");
+  const [vercelDeployHookUrl, setVercelDeployHookUrl] = useState("");
 
   useEffect(() => {
     const c = getIdeConfig();
@@ -49,21 +52,48 @@ export function SettingsDialog({
     setGithubRepo(c.githubRepo ?? "");
     setGithubBranch(c.githubBranch ?? "main");
     setGithubExcludeEnv(c.githubExcludeEnv ?? true);
+    setDeploySiteUrl(c.deploySiteUrl ?? "");
+    setVercelDeployHookUrl(c.vercelDeployHookUrl ?? "");
+    void (async () => {
+      const pid = await ensureProjectId();
+      if (!pid) return;
+      const { getProjectDeployMeta } = await import("@/lib/userSupabase");
+      const meta = await getProjectDeployMeta(pid);
+      if (meta?.deploy_site_url && !c.deploySiteUrl) setDeploySiteUrl(meta.deploy_site_url);
+      if (meta?.vercel_deploy_hook_url && !c.vercelDeployHookUrl) {
+        setVercelDeployHookUrl(meta.vercel_deploy_hook_url);
+      }
+      if (meta?.github_repo && !c.githubRepo) setGithubRepo(meta.github_repo);
+      if (meta?.github_branch && c.githubBranch === "main") setGithubBranch(meta.github_branch);
+    })();
   }, [open]);
 
   const save = () => {
-    setIdeConfig({
-      supabaseUrl,
-      supabaseKey,
-      openaiKey,
-      openaiModel,
-      githubToken,
-      githubRepo,
-      githubBranch,
-      githubExcludeEnv,
-    });
-    toast.success("Configuración guardada");
-    setOpen(false);
+    void (async () => {
+      setIdeConfig({
+        supabaseUrl,
+        supabaseKey,
+        openaiKey,
+        openaiModel,
+        githubToken,
+        githubRepo,
+        githubBranch,
+        githubExcludeEnv,
+        deploySiteUrl: deploySiteUrl.trim() || undefined,
+        vercelDeployHookUrl: vercelDeployHookUrl.trim() || undefined,
+      });
+      const pid = await ensureProjectId();
+      if (pid) {
+        await saveProjectDeployMeta(pid, {
+          github_repo: githubRepo.trim() || null,
+          github_branch: githubBranch.trim() || "main",
+          deploy_site_url: deploySiteUrl.trim() || null,
+          vercel_deploy_hook_url: vercelDeployHookUrl.trim() || null,
+        });
+      }
+      toast.success("Configuración guardada");
+      setOpen(false);
+    })();
   };
 
   return (
@@ -140,6 +170,37 @@ export function SettingsDialog({
                 <code>.gitignore</code> automáticamente.
               </span>
             </label>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold uppercase text-muted-foreground">Sitio publicado</h3>
+            <div className="space-y-2">
+              <Label htmlFor="deploy-url">URL del sitio (Vercel o dominio)</Label>
+              <Input
+                id="deploy-url"
+                placeholder="mi-app.vercel.app"
+                value={deploySiteUrl}
+                onChange={(e) => setDeploySiteUrl(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Tras conectar el repo en Vercel, pega aquí la URL donde se verá tu app. Se usa para
+                verificar la publicación.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="vercel-hook">Deploy Hook de Vercel (opcional)</Label>
+              <Input
+                id="vercel-hook"
+                type="url"
+                placeholder="https://api.vercel.com/v1/integrations/deploy/..."
+                value={vercelDeployHookUrl}
+                onChange={(e) => setVercelDeployHookUrl(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Vercel → proyecto → Settings → Git → Deploy Hooks. GafCore lo dispara tras subir a
+                GitHub.
+              </p>
+            </div>
           </section>
         </div>
 

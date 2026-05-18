@@ -14,7 +14,13 @@ import {
   setCurrentProjectId,
   clearCurrentProjectId,
   listSecrets,
+  getProjectDeployMeta,
 } from "@/lib/userSupabase";
+import {
+  deployHostFromGithubRepo,
+  normalizeDeployHost,
+  type GafcoreDeployResult,
+} from "@/lib/gafcore-deploy.shared";
 import { fileItemsFromBrowserFileList } from "@/lib/gafcore-import-files";
 import { sanitizeProjectJsxFiles } from "@/lib/gafcore-media.shared";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -140,6 +146,7 @@ export function GafCoreIDE() {
   const [projectName, setProjectName] = useState("GafCore");
   /** ID del proyecto activo (sincronizado con `setCurrentProjectId` en userSupabase). */
   const [currentProjectId, setCurrentProjectIdState] = useState<string | null>(null);
+  const [deploySiteHost, setDeploySiteHost] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [secretsOpen, setSecretsOpen] = useState(false);
@@ -460,6 +467,23 @@ export function GafCoreIDE() {
     };
   }, [files, loaded, currentProjectId]);
 
+  useEffect(() => {
+    if (!currentProjectId) {
+      setDeploySiteHost(null);
+      return;
+    }
+    void (async () => {
+      const meta = await getProjectDeployMeta(currentProjectId);
+      const cfg = getIdeConfig();
+      const host =
+        normalizeDeployHost(meta?.deploy_site_url ?? cfg.deploySiteUrl) ??
+        (meta?.github_repo || cfg.githubRepo
+          ? deployHostFromGithubRepo(meta?.github_repo ?? cfg.githubRepo ?? "")
+          : null);
+      setDeploySiteHost(host);
+    })();
+  }, [currentProjectId, settingsOpen]);
+
   const openFile = (i: number) => {
     setActiveIndex(i);
     const name = files[i]?.name;
@@ -471,57 +495,65 @@ export function GafCoreIDE() {
     setOpenTabs(next.length ? next : ([files[0]?.name].filter(Boolean) as string[]));
   };
 
-  const onDeploy = async () => {
-    const cfg = getIdeConfig();
-    if (!cfg.githubToken || !cfg.githubRepo) {
-      toast.error("Configura tu GitHub Token y repo para publicar", {
-        action: { label: "Abrir Configuración", onClick: () => setSettingsOpen(true) },
-      });
-      return;
+  const onDeploy = async (): Promise<GafcoreDeployResult> => {
+    if (!currentProjectId) {
+      throw new Error("Crea o selecciona un proyecto antes de publicar (+ Nuevo).");
     }
-    const branch = cfg.githubBranch ?? "main";
+
+    const cfg = getIdeConfig();
+    const meta = await getProjectDeployMeta(currentProjectId);
+    const githubRepo = (meta?.github_repo ?? cfg.githubRepo)?.trim();
+    const githubToken = cfg.githubToken?.trim();
+    const branch = meta?.github_branch ?? cfg.githubBranch ?? "main";
+    const hookUrl = (meta?.vercel_deploy_hook_url ?? cfg.vercelDeployHookUrl)?.trim();
+
+    if (!githubToken || !githubRepo) {
+      throw new Error("Configura GitHub Token y repo en Configuración.");
+    }
+
     setDeploying(true);
     try {
-      // Pre-flight: verify repo + branch exist with the given token
+      const saved = await saveProjectFilesDetailed(files, currentProjectId);
+      if (!saved.ok) {
+        throw new Error(
+          saved.reason === "no_project"
+            ? "No hay proyecto activo."
+            : saved.detail
+              ? `No se pudo guardar antes de publicar: ${saved.detail}`
+              : "No se pudo guardar antes de publicar.",
+        );
+      }
+
       const check = await fetch(
-        `https://api.github.com/repos/${cfg.githubRepo}/branches/${encodeURIComponent(branch)}`,
+        `https://api.github.com/repos/${githubRepo}/branches/${encodeURIComponent(branch)}`,
         {
           headers: {
-            Authorization: `Bearer ${cfg.githubToken}`,
+            Authorization: `Bearer ${githubToken}`,
             Accept: "application/vnd.github+json",
           },
         },
       );
       if (!check.ok) {
         if (check.status === 401 || check.status === 403) {
-          toast.error("Token de GitHub inválido o sin permisos (necesita scope `repo`)", {
-            action: { label: "Configuración", onClick: () => setSettingsOpen(true) },
-          });
-        } else if (check.status === 404) {
-          toast.error(`No se encontró ${cfg.githubRepo}@${branch}. Verifica el repo y la rama.`, {
-            action: { label: "Configuración", onClick: () => setSettingsOpen(true) },
-          });
-        } else {
-          toast.error(`GitHub respondió ${check.status} al verificar el repo.`);
+          throw new Error("Token de GitHub inválido o sin permisos (scope repo).");
         }
-        return;
+        if (check.status === 404) {
+          throw new Error(`No se encontró ${githubRepo}@${branch}.`);
+        }
+        throw new Error(`GitHub respondió ${check.status} al verificar el repo.`);
       }
 
-      // Inject .env from project secrets (if any), unless excluded
       const secrets = await listSecrets();
       const filesToDeploy = [...files];
       const excludeEnv = cfg.githubExcludeEnv !== false;
-      let envIncluded = 0;
       if (secrets.length > 0 && !excludeEnv) {
         const envContent =
           "# Generado por GafCore — secretos del proyecto\n" +
           secrets.map((s) => `${s.name}=${JSON.stringify(s.value)}`).join("\n") +
           "\n";
         filesToDeploy.push({ name: ".env", language: "plaintext", content: envContent });
-        envIncluded = secrets.length;
       }
 
-      // Si excluimos .env, asegurarnos de que .gitignore del proyecto lo contenga
       if (excludeEnv) {
         const giIdx = filesToDeploy.findIndex((f) => f.name === ".gitignore");
         if (giIdx >= 0) {
@@ -541,27 +573,40 @@ export function GafCoreIDE() {
         }
       }
 
-      const envNote = envIncluded
-        ? ` (incluye .env con ${envIncluded} secretos)`
-        : excludeEnv && secrets.length
-          ? ` (.env omitido — ${secrets.length} secretos no se subirán)`
-          : "";
-      toast.message(`Subiendo ${filesToDeploy.length} archivos a ${cfg.githubRepo}${envNote}…`);
+      toast.message(`Subiendo ${filesToDeploy.length} archivos a ${githubRepo}…`);
       const r = await deployToGithub(filesToDeploy, {
-        token: cfg.githubToken,
-        repo: cfg.githubRepo,
+        token: githubToken,
+        repo: githubRepo,
         branch,
       });
-      const repoUrl = `https://github.com/${cfg.githubRepo}/tree/${branch}`;
-      if (r.ok) {
-        toast.success(r.message, {
-          action: { label: "Ver en GitHub", onClick: () => window.open(repoUrl, "_blank") },
-        });
-      } else {
-        toast.error(r.message);
+
+      if (!r.ok) {
+        return { ok: false, message: r.message };
       }
-    } catch (e: any) {
-      toast.error(e?.message ?? "Error al hacer deploy");
+
+      if (hookUrl) {
+        try {
+          await fetch(hookUrl, { method: "POST" });
+          toast.message("Deploy Hook de Vercel disparado");
+        } catch {
+          toast.error("Push OK, pero falló el Deploy Hook de Vercel");
+        }
+      }
+
+      const repoUrl = `https://github.com/${githubRepo}/tree/${branch}`;
+      const siteHost =
+        normalizeDeployHost(meta?.deploy_site_url ?? cfg.deploySiteUrl) ??
+        deployHostFromGithubRepo(githubRepo);
+
+      if (siteHost) setDeploySiteHost(siteHost);
+
+      return {
+        ok: true,
+        message: r.message,
+        repoUrl,
+        fileCount: filesToDeploy.length,
+        siteHost: siteHost ?? undefined,
+      };
     } finally {
       setDeploying(false);
     }
@@ -1076,7 +1121,9 @@ export function GafCoreIDE() {
             Compartir
           </Button>
           <PublishDialog
-            customDomain="gafcore.com"
+            siteHost={deploySiteHost}
+            projectId={currentProjectId}
+            canPublish={Boolean(currentProjectId)}
             isUpdating={deploying}
             onUpdate={onDeploy}
             onOpenSettings={() => setSettingsOpen(true)}

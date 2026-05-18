@@ -112,6 +112,64 @@ export async function renameProject(id: string, name: string): Promise<boolean> 
   return true;
 }
 
+export type ProjectDeployMeta = {
+  github_repo: string | null;
+  github_branch: string | null;
+  deploy_site_url: string | null;
+  vercel_deploy_hook_url: string | null;
+};
+
+export async function getProjectDeployMeta(
+  projectId?: string | null,
+): Promise<ProjectDeployMeta | null> {
+  const sb = getUserSupabase();
+  if (!sb) return null;
+  const id = projectId ?? (await ensureProjectId());
+  if (!id) return null;
+  const { data, error } = await sb
+    .from("projects")
+    .select("github_repo, github_branch, deploy_site_url, vercel_deploy_hook_url")
+    .eq("id", id)
+    .maybeSingle();
+  if (error || !data) {
+    if (error) console.error("[Supabase] getProjectDeployMeta error:", error);
+    return null;
+  }
+  const row = data as Record<string, unknown>;
+  return {
+    github_repo: (row.github_repo as string | null) ?? null,
+    github_branch: (row.github_branch as string | null) ?? "main",
+    deploy_site_url: (row.deploy_site_url as string | null) ?? null,
+    vercel_deploy_hook_url: (row.vercel_deploy_hook_url as string | null) ?? null,
+  };
+}
+
+export async function saveProjectDeployMeta(
+  projectId: string,
+  meta: {
+    github_repo?: string | null;
+    github_branch?: string | null;
+    deploy_site_url?: string | null;
+    vercel_deploy_hook_url?: string | null;
+  },
+): Promise<boolean> {
+  const sb = getUserSupabase();
+  if (!sb) return false;
+  const patch: Record<string, unknown> = {};
+  if (meta.github_repo !== undefined) patch.github_repo = meta.github_repo?.trim() || null;
+  if (meta.github_branch !== undefined) patch.github_branch = meta.github_branch?.trim() || "main";
+  if (meta.deploy_site_url !== undefined) patch.deploy_site_url = meta.deploy_site_url?.trim() || null;
+  if (meta.vercel_deploy_hook_url !== undefined) {
+    patch.vercel_deploy_hook_url = meta.vercel_deploy_hook_url?.trim() || null;
+  }
+  const { error } = await sb.from("projects").update(patch).eq("id", projectId);
+  if (error) {
+    console.error("[Supabase] saveProjectDeployMeta error:", error);
+    return false;
+  }
+  return true;
+}
+
 export function getCurrentProjectId(): string | null {
   try {
     return localStorage.getItem(PROJECT_KEY);
@@ -441,6 +499,7 @@ export type PublishRow = {
 };
 
 export async function recordPublish(input: {
+  projectId?: string;
   url?: string;
   visibility?: "public" | "private";
   fileCount?: number;
@@ -452,7 +511,7 @@ export async function recordPublish(input: {
 }): Promise<string | null> {
   const sb = getUserSupabase();
   if (!sb) return null;
-  const projectId = await ensureProjectId();
+  const projectId = input.projectId ?? (await ensureProjectId());
   if (!projectId) return null;
   const { data: userRes } = await sb.auth.getUser();
   const userId = userRes?.user?.id;
@@ -503,10 +562,10 @@ export async function updatePublishRecord(
   return true;
 }
 
-export async function listPublishes(limit = 20): Promise<PublishRow[]> {
+export async function listPublishes(limit = 20, explicitProjectId?: string): Promise<PublishRow[]> {
   const sb = getUserSupabase();
   if (!sb) return [];
-  const projectId = await ensureProjectId();
+  const projectId = explicitProjectId ?? (await ensureProjectId());
   if (!projectId) return [];
   const { data, error } = await sb
     .from("project_publishes")

@@ -190,10 +190,13 @@ export function clearCurrentProjectId() {
   } catch {}
 }
 
-export async function loadProjectFiles(): Promise<FileItem[] | null> {
+export async function loadProjectFiles(
+  explicitProjectId?: string | null,
+): Promise<FileItem[] | null> {
   const sb = getUserSupabase();
   if (!sb) return null;
-  const projectId = await ensureProjectId();
+  let projectId = explicitProjectId?.trim() || null;
+  if (!projectId) projectId = await ensureProjectId();
   if (!projectId) return null;
 
   const { data, error } = await sb

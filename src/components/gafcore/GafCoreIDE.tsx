@@ -8,6 +8,7 @@ import {
   saveProjectFilesDetailed,
   getUserSupabase,
   listProjects,
+  type ProjectRow,
   createProject,
   renameProject,
   getCurrentProjectId,
@@ -57,6 +58,7 @@ import {
   FolderOpen,
   Upload,
   CreditCard,
+  Check,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -146,6 +148,8 @@ export function GafCoreIDE() {
   const [projectName, setProjectName] = useState("GafCore");
   /** ID del proyecto activo (sincronizado con `setCurrentProjectId` en userSupabase). */
   const [currentProjectId, setCurrentProjectIdState] = useState<string | null>(null);
+  const [recentProjects, setRecentProjects] = useState<ProjectRow[]>([]);
+  const [switchingProject, setSwitchingProject] = useState(false);
   const [deploySiteHost, setDeploySiteHost] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -238,6 +242,7 @@ export function GafCoreIDE() {
 
   const refreshProjects = async () => {
     const list = await listProjects();
+    setRecentProjects(list.slice(0, 8));
     const cur = getCurrentProjectId();
     const nextId = cur && list.some((p) => p.id === cur) ? cur : null;
     if (!nextId) {
@@ -247,6 +252,66 @@ export function GafCoreIDE() {
     const found = nextId ? list.find((p) => p.id === nextId) : undefined;
     if (found) setProjectName(found.name);
     else if (list.length === 0) setProjectName("Sin proyecto");
+  };
+
+  const hydrateEditorFromRemote = async (remote: FileItem[] | null, projectId: string) => {
+    const appFile = remote?.find((f) => /^app\.(jsx?|tsx?)$/i.test(f.name));
+    const isStale =
+      !remote ||
+      remote.length === 0 ||
+      !appFile ||
+      !/export\s+default/.test(appFile.content) ||
+      /Hello\s*\(/.test(appFile.content) ||
+      /GafCore listo|Pídele algo a GafCore|Editor · App\.tsx|const \[code, setCode\]/.test(
+        appFile.content,
+      ) ||
+      /Hola desde GafCore/i.test(appFile.content);
+
+    if (!isStale && remote?.length) {
+      const sanitized = sanitizeProjectJsxFiles(remote);
+      const jsxFixed = sanitized.some((f, i) => f.content !== remote[i]?.content);
+      setFiles(sanitized);
+      setOpenTabs([sanitized[0]?.name ?? remote[0].name]);
+      setActiveIndex(0);
+      if (jsxFixed) void saveProjectFiles(sanitized, projectId);
+      return;
+    }
+
+    const ok = await saveProjectFiles(initialFiles, projectId);
+    setFiles(initialFiles);
+    setOpenTabs([initialFiles[0].name]);
+    setActiveIndex(0);
+    if (!ok) toast.error("No se pudo guardar la plantilla inicial");
+  };
+
+  const switchToProject = async (p: ProjectRow) => {
+    if (p.id === currentProjectId || switchingProject) return;
+    setSwitchingProject(true);
+    try {
+      if (currentProjectId && loaded) {
+        await saveProjectFilesDetailed(files, currentProjectId);
+      }
+      setCurrentProjectId(p.id);
+      setCurrentProjectIdState(p.id);
+      setProjectName(p.name);
+      const remote = await loadProjectFiles(p.id);
+      await hydrateEditorFromRemote(remote, p.id);
+      setPreviewKey((k) => k + 1);
+      const meta = await getProjectDeployMeta(p.id);
+      const cfg = getIdeConfig();
+      const host =
+        normalizeDeployHost(meta?.deploy_site_url ?? cfg.deploySiteUrl) ??
+        (meta?.github_repo || cfg.githubRepo
+          ? deployHostFromGithubRepo(meta?.github_repo ?? cfg.githubRepo ?? "")
+          : null);
+      setDeploySiteHost(host);
+      toast.success(`Proyecto «${p.name}»`);
+    } catch (e) {
+      console.error(e);
+      toast.error("No se pudo cambiar de proyecto");
+    } finally {
+      setSwitchingProject(false);
+    }
   };
 
   const newProject = async () => {
@@ -407,38 +472,9 @@ export function GafCoreIDE() {
       const row = list.find((p) => p.id === activeId);
       if (row) setProjectName(row.name);
 
-      const remote = await loadProjectFiles();
-      const appFile = remote?.find((f) => /^app\.(jsx?|tsx?)$/i.test(f.name));
-      const isStale =
-        !remote ||
-        remote.length === 0 ||
-        !appFile ||
-        !/export\s+default/.test(appFile.content) ||
-        /Hello\s*\(/.test(appFile.content) ||
-        /GafCore listo|Pídele algo a GafCore|Editor · App\.tsx|const \[code, setCode\]/.test(
-          appFile.content,
-        );
-      if (!isStale) {
-        const sanitized = sanitizeProjectJsxFiles(remote!);
-        const jsxFixed = sanitized.some((f, i) => f.content !== remote![i]?.content);
-        setFiles((prev) => {
-          const remoteNames = new Set(sanitized.map((f) => f.name));
-          const extras = prev.filter((f) => !remoteNames.has(f.name));
-          return [...sanitized, ...extras];
-        });
-        setOpenTabs([sanitized[0]?.name ?? remote![0].name]);
-        if (jsxFixed) void saveProjectFiles(sanitized);
-        toast.success(
-          jsxFixed
-            ? `Cargados ${sanitized.length} archivos (sintaxis JSX reparada)`
-            : `Cargados ${sanitized.length} archivos`,
-        );
-      } else {
-        const ok = await saveProjectFiles(initialFiles);
-        setFiles(initialFiles);
-        setOpenTabs([initialFiles[0].name]);
-        if (ok) toast.success(`Plantilla GafCore restaurada (${initialFiles.length} archivos)`);
-      }
+      setRecentProjects(list.slice(0, 8));
+      const remote = await loadProjectFiles(activeId);
+      await hydrateEditorFromRemote(remote, activeId);
       setLoaded(true);
     })();
   }, []);
@@ -708,7 +744,12 @@ export function GafCoreIDE() {
           >
             G
           </div>
-          <DropdownMenu modal={false}>
+          <DropdownMenu
+            modal={false}
+            onOpenChange={(open) => {
+              if (open) void refreshProjects();
+            }}
+          >
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
@@ -799,7 +840,7 @@ export function GafCoreIDE() {
               <DropdownMenuSeparator />
               <DropdownMenuLabel className="flex items-center justify-between text-[11px] uppercase tracking-wide text-muted-foreground">
                 <span className="flex items-center gap-1.5">
-                  <FolderOpen className="h-3.5 w-3.5" /> Mis proyectos
+                  <FolderOpen className="h-3.5 w-3.5" /> Cambiar proyecto
                 </span>
                 <button
                   type="button"
@@ -814,6 +855,29 @@ export function GafCoreIDE() {
                   <Plus className="h-3 w-3" /> Nuevo
                 </button>
               </DropdownMenuLabel>
+              {recentProjects.length === 0 ? (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  Sin proyectos. Usa «+ Nuevo» para crear uno.
+                </div>
+              ) : (
+                recentProjects.map((p) => (
+                  <DropdownMenuItem
+                    key={p.id}
+                    disabled={switchingProject}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void switchToProject(p);
+                    }}
+                  >
+                    {p.id === currentProjectId ? (
+                      <Check className="mr-2 h-4 w-4 text-primary" />
+                    ) : (
+                      <Folder className="mr-2 h-4 w-4 text-muted-foreground" />
+                    )}
+                    <span className="flex-1 truncate">{p.name}</span>
+                  </DropdownMenuItem>
+                ))
+              )}
               <DropdownMenuItem onClick={() => void navigate({ to: "/gafcore/projects" })}>
                 <LayoutGrid className="mr-2 h-4 w-4" />
                 Todos los proyectos

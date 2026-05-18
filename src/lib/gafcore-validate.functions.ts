@@ -3,6 +3,10 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import ts from "typescript";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import {
+  auditFunctionalFirst,
+  formatFunctionalAuditForUser,
+} from "@/lib/gafcore-functional-first.shared";
 
 const fileSchema = z.object({
   name: z.string().min(1).max(512),
@@ -45,4 +49,17 @@ export const validateGafcoreSources = createServerFn({ method: "POST" })
       }
     }
     return { ok: errors.length === 0, errors };
+  });
+
+/** Auditoría FUNCTIONAL-FIRST (heurística) tras generación IA. */
+export const validateGafcoreFunctional = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((input) => schema.parse(input))
+  .handler(async ({ data }) => {
+    const audit = auditFunctionalFirst(data);
+    return {
+      ok: audit.ok,
+      issues: audit.issues,
+      summary: formatFunctionalAuditForUser(audit.issues),
+    };
   });

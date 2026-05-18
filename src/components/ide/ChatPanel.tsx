@@ -56,6 +56,12 @@ import { useSubscription } from "@/hooks/useSubscription";
 import { sanitizeUserFacingAiText } from "@/lib/gafcore-user-facing-errors";
 import { displayMonthlyAllowanceForUi } from "@/lib/gafcore-plan-credits.shared";
 import { COST_PER_REQUEST } from "@/lib/gafcore-chat.shared";
+import {
+  auditFunctionalFirst,
+  formatFunctionalAuditForUser,
+  FUNCTIONAL_FIRST_BUILD_PREFIX,
+} from "@/lib/gafcore-functional-first.shared";
+import { validateGafcoreFunctional } from "@/lib/gafcore-validate.functions";
 
 type Msg = { role: "user" | "ai"; content: string; ts?: number };
 
@@ -760,6 +766,7 @@ export function ChatPanel({
 
   const callGafcoreChat = useServerFn(gafcoreChat);
   const callValidateSources = useServerFn(validateGafcoreSources);
+  const callValidateFunctional = useServerFn(validateGafcoreFunctional);
   const callEnrichMedia = useServerFn(enrichGafcoreMedia);
 
   const mergeGeneratedFiles = (
@@ -803,6 +810,8 @@ export function ChatPanel({
       setCreditsOut(true);
       return;
     }
+    const functionalPrefix =
+      mode === "build" && !visualEditOn ? FUNCTIONAL_FIRST_BUILD_PREFIX : "";
     const deepPrefix =
       deepModel && mode === "build"
         ? "[modo profundo] Prioriza análisis cuidadoso, UI cuidada y código robusto; la salida sigue siendo solo el JSON del contrato. "
@@ -814,7 +823,7 @@ export function ChatPanel({
     const visualPrefix = visualEditOn
       ? "[Edición visual] Enfócate solo en cambios de UI/estilos sin tocar lógica. "
       : "";
-    const instruction = deepPrefix + chatPrefix + visualPrefix + coreText + pendingRef;
+    const instruction = functionalPrefix + deepPrefix + chatPrefix + visualPrefix + coreText + pendingRef;
     if (!instruction.trim() || loading) return;
     const myEpoch = ++requestEpochRef.current;
     setInput("");
@@ -970,6 +979,38 @@ export function ChatPanel({
           }
         } catch {
           /* validación best-effort */
+        }
+
+        if (mode === "build" && !visualEditOn) {
+          const localAudit = auditFunctionalFirst(
+            merged.map((f) => ({ name: f.name, content: f.content })),
+          );
+          try {
+            const remote = await callValidateFunctional({
+              data: outFiles.map((f) => ({ name: f.name, content: f.content })),
+            });
+            const issues = remote.issues?.length ? remote.issues : localAudit.issues;
+            if (issues.length > 0) {
+              const text = formatFunctionalAuditForUser(issues);
+              setLastError((prev) =>
+                prev ? `${prev}\n\n[Functional-first]\n${text}` : `[Functional-first]\n${text}`,
+              );
+              toast.message("Revisa funcionalidad (functional-first)", {
+                description: issues[0]?.message,
+                duration: 8000,
+              });
+            }
+          } catch {
+            if (localAudit.issues.length > 0) {
+              const text = formatFunctionalAuditForUser(localAudit.issues);
+              setLastError((prev) =>
+                prev ? `${prev}\n\n[Functional-first]\n${text}` : `[Functional-first]\n${text}`,
+              );
+              toast.message("Revisa funcionalidad del código generado", {
+                description: localAudit.issues[0]?.message,
+              });
+            }
+          }
         }
       }
     } catch (error: any) {

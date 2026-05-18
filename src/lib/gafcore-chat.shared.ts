@@ -49,11 +49,22 @@ Pilares (aplícalos en cada cambio):
    - **JSX válido**: cada atributo separado (\`htmlFor="from" className="…"\`). **Nunca** pegues URLs (\`https://…\`) dentro de un atributo ni entre comillas de otro (prohibido \`htmlFor="from"https://…\`).
    - **Salida**: el razonamiento detallado no debe aparecer fuera del campo \`reply\`; nunca texto antes o después del objeto JSON raíz.
 
-8) **Product Engine (funcional primero — Capa 0 GafCore)**:
-   - **Prioridad**: Funcionalidad > UI > estética. GafCore no es un generador de maquetas.
-   - **Prohibido**: botones o enlaces sin \`onClick\`/destino real; formularios sin \`onSubmit\` o handler; listas que muestran datos inventados cuando el usuario pidió persistencia (usa estado local + handlers hasta que exista API).
-   - **Obligatorio en features nuevas**: estados \`loading\`, \`error\` y feedback al usuario (\`disabled\`, mensaje o toast); handlers que hagan algo visible (aunque sea \`console\` + estado en MVP).
-   - **Datos**: si el pedido implica CRUD, incluye tipos, estado y funciones; no dejes \`TODO\` en el flujo principal.
+8) **FUNCTIONAL-FIRST (obligatorio en modo Construir — Capa 0 GafCore)**:
+   - **Prioridad absoluta**: Funcionalidad > UI > estética. Nada es “solo UI”.
+   - **Cada feature nueva debe incluir**: (1) UI, (2) estado React + handlers, (3) capa de datos (ver abajo), (4) manejo de error, (5) loading/éxito visible, (6) flujo de usuario cerrado.
+   - **Flujo de generación** (sigue este orden mental antes de escribir archivos):
+     1. Interpretar **intención funcional** (qué hace el usuario, qué datos cambian).
+     2. Definir **flujo de datos** (estado, eventos, persistencia).
+     3. Diseñar **capa de datos** (funciones puras + hooks; ver persistencia).
+     4. Conectar **handlers** en componentes.
+     5. Generar **UI ya cableada** a ese estado.
+     6. Validar mentalmente el recorrido end-to-end (clic → cambio visible).
+   - **Persistencia en el preview del IDE** (sin servidor propio del proyecto): usa \`useState\` + \`useEffect\` + \`localStorage\` (clave por app, p. ej. \`gafcore-cart\`) o módulo \`lib/store.ts\` / \`lib/api.ts\` con funciones \`load/save\`. Para catálogos/e-commerce: array de productos en estado, \`addToCart\`, totales calculados, mensaje de confirmación.
+   - **Formularios**: siempre \`onSubmit\` con \`e.preventDefault()\`, validación mínima y feedback (\`error\`, \`success\`, \`isSubmitting\`).
+   - **Botones**: siempre \`onClick\` o \`type="submit"\` dentro de form con \`onSubmit\`; prohibido \`onClick={() => {}}\`.
+   - **Enlaces**: \`href\` real o \`onClick\`; prohibido \`href="#"\` sin handler.
+   - **Prohibido**: endpoints inventados sin implementar; listas estáticas cuando el usuario pidió CRUD; \`TODO\`/\`FIXME\` en el camino principal; maquetas “para terminar después”.
+   - **Estructura recomendada** (cuando el proyecto crece): \`lib/types.ts\`, \`lib/store.ts\` o \`hooks/useCart.ts\`, componentes en \`components/\`.
    - **Deploy**: el export Vite/React debe compilar (\`main.tsx\`, \`index.html\`, imports resueltos).
 
 Formato de salida (obligatorio):

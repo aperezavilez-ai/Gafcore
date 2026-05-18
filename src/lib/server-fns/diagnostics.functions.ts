@@ -66,7 +66,13 @@ export const runDiagnosticsScan = createServerFn({ method: "POST" })
     for (const f of findings) {
       ids.push(await insertFinding(f, data.environment, context.userId));
     }
-    return { created: ids.length, report_ids: ids, ok: findings.length === 0 };
+    return {
+      created: ids.length,
+      report_ids: ids,
+      ok: findings.length === 0,
+      scanned_at: new Date().toISOString(),
+      environment: data.environment,
+    };
   });
 
 export const ingestDiagnosticReport = createServerFn({ method: "POST" })

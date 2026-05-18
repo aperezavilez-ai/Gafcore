@@ -20,10 +20,35 @@ import { Label } from "@/components/ui/label";
 import {
   severityLabel,
   statusLabel,
+  formatDiagnosticScanTime,
+  DIAGNOSTIC_LAST_SCAN_STORAGE_KEY,
+  type DiagnosticLastScan,
   type DiagnosticReportRow,
   type DiagnosticSeverity,
 } from "@/lib/gafcore-diagnostics.shared";
-import { ArrowLeft, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Loader2, RefreshCw, ShieldAlert } from "lucide-react";
+
+function readLastScanFromStorage(): DiagnosticLastScan | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(DIAGNOSTIC_LAST_SCAN_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DiagnosticLastScan;
+    if (!parsed?.scannedAt || typeof parsed.ok !== "boolean") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastScanToStorage(scan: DiagnosticLastScan): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(DIAGNOSTIC_LAST_SCAN_STORAGE_KEY, JSON.stringify(scan));
+  } catch {
+    /* quota / private mode */
+  }
+}
 
 function severityVariant(s: DiagnosticSeverity): "default" | "secondary" | "destructive" | "outline" {
   if (s === "critical" || s === "high") return "destructive";
@@ -49,6 +74,7 @@ export function DiagnosticsOpsPanel() {
   const [modifyText, setModifyText] = useState("");
   const [manualTitle, setManualTitle] = useState("");
   const [manualDesc, setManualDesc] = useState("");
+  const [lastScan, setLastScan] = useState<DiagnosticLastScan | null>(null);
 
   const reloadList = useCallback(async () => {
     setLoading(true);
@@ -79,6 +105,7 @@ export function DiagnosticsOpsPanel() {
 
   useEffect(() => {
     void reloadList();
+    setLastScan(readLastScanFromStorage());
   }, [reloadList]);
 
   const onScan = async () => {
@@ -86,6 +113,14 @@ export function DiagnosticsOpsPanel() {
     try {
       const origin = typeof window !== "undefined" ? window.location.origin : undefined;
       const res = await scan({ data: { origin, environment: "production" } });
+      const summary: DiagnosticLastScan = {
+        scannedAt: res.scanned_at,
+        ok: res.ok,
+        created: res.created,
+        environment: res.environment,
+      };
+      setLastScan(summary);
+      writeLastScanToStorage(summary);
       toast.success(
         res.ok ? "Escaneo OK: sin hallazgos" : `Escaneo: ${res.created} reporte(s) creado(s)`,
       );
@@ -214,9 +249,49 @@ export function DiagnosticsOpsPanel() {
             <CardTitle className="text-base">Reportes</CardTitle>
           </CardHeader>
           <CardContent className="max-h-[480px] space-y-2 overflow-y-auto">
+            {lastScan && (
+              <div
+                className={`rounded-lg border px-3 py-2.5 text-sm ${
+                  lastScan.ok
+                    ? "border-primary/30 bg-primary/5 text-foreground"
+                    : "border-destructive/30 bg-destructive/5 text-foreground"
+                }`}
+              >
+                <div className="flex items-start gap-2">
+                  {lastScan.ok ? (
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  ) : (
+                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                  )}
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="font-medium">
+                      {lastScan.ok
+                        ? "Último escaneo: OK, sin hallazgos"
+                        : `Último escaneo: ${lastScan.created} reporte(s) detectado(s)`}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatDiagnosticScanTime(lastScan.scannedAt)} · {lastScan.environment}
+                    </p>
+                    {lastScan.ok && reports.length === 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Los escaneos limpios no crean filas; solo aparecen aquí los problemas o
+                        reportes manuales.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             {loading && <p className="text-sm text-muted-foreground">Cargando…</p>}
-            {!loading && reports.length === 0 && (
-              <p className="text-sm text-muted-foreground">Sin reportes. Ejecuta un escaneo.</p>
+            {!loading && reports.length === 0 && !lastScan && (
+              <p className="text-sm text-muted-foreground">
+                Sin reportes. Pulsa «Escanear sistema» para comprobar doctor + health.
+              </p>
+            )}
+            {!loading && reports.length === 0 && lastScan && !lastScan.ok && (
+              <p className="text-sm text-muted-foreground">
+                No hay reportes en la lista. Si acabas de escanear, pulsa «Actualizar lista».
+              </p>
             )}
             {reports.map((r) => (
               <button

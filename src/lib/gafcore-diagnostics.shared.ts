@@ -107,3 +107,24 @@ export function statusLabel(s: DiagnosticStatus): string {
   };
   return map[s];
 }
+
+/** Resumen del último escaneo (UI; opcional en localStorage del navegador). */
+export type DiagnosticLastScan = {
+  scannedAt: string;
+  ok: boolean;
+  created: number;
+  environment: string;
+};
+
+export const DIAGNOSTIC_LAST_SCAN_STORAGE_KEY = "gafcore:diagnostics:lastScan";
+
+export function formatDiagnosticScanTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("es-ES", {
+      dateStyle: "short",
+      timeStyle: "medium",
+    });
+  } catch {
+    return iso;
+  }
+}
